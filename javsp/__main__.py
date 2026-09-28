@@ -108,7 +108,9 @@ def parallel_crawler(movie: Movie, tqdm_bar=None):
                 if isinstance(tqdm_bar, tqdm):
                     tqdm_bar.set_description(f'{crawler_name}: 网络错误，正在重试')
             except Exception as e:
-                logger.exception(e)
+                # 解析错误通常是网页结构变化导致的，重试也不会成功，因此直接放弃
+                logger.exception(f'{crawler_name}: 抓取出错: {e!r}')
+                break
 
     # 根据影片的数据源获取对应的抓取器
     crawler_mods: List[CrawlerID] = Cfg().crawler.selection[movie.data_src]
@@ -124,7 +126,11 @@ def parallel_crawler(movie: Movie, tqdm_bar=None):
     thread_pool = []
     for mod_partial, info in all_info.items():
         mod = f"javsp.web.{mod_partial}"
-        parser = getattr(sys.modules[mod], 'parse_data')
+        # 抓取器带有parse_clean_data时优先使用，它会在抓取后额外进行数据清洗（如统一genre）
+        if hasattr(sys.modules[mod], 'parse_clean_data'):
+            parser = getattr(sys.modules[mod], 'parse_clean_data')
+        else:
+            parser = getattr(sys.modules[mod], 'parse_data')
         # 将all_info中的info实例传递给parser，parser抓取完成后，info实例的值已经完成更新
         # TODO: 抓取器如果带有parse_data_raw，说明它已经自行进行了重试处理，此时将重试次数设置为1
         if hasattr(sys.modules[mod], 'parse_data_raw'):
@@ -165,6 +171,7 @@ def info_summary(movie: Movie, all_info: Dict[str, MovieInfo]):
     # genre
     if 'javdb' in all_info and all_info['javdb'].genre:
         final_info.genre = all_info['javdb'].genre
+        final_info.genre_norm = all_info['javdb'].genre_norm
 
     ########## 移除所有抓取器数据中，标题尾部的女优名 ##########
     if Cfg().summarizer.title.remove_trailing_actor_name:
@@ -237,10 +244,15 @@ def info_summary(movie: Movie, all_info: Dict[str, MovieInfo]):
     # 特殊的 genre
     if final_info.genre is None:
         final_info.genre = []
-    if movie.hard_sub:
-        final_info.genre.append('内嵌字幕')
-    if movie.uncensored:
-        final_info.genre.append('无码流出/破解')
+    # genre_norm非空时会优先于genre被使用，因此特殊的genre也要同时添加到genre_norm中
+    genre_lists = [final_info.genre]
+    if final_info.genre_norm:
+        genre_lists.append(final_info.genre_norm)
+    for genre_list in genre_lists:
+        if movie.hard_sub:
+            genre_list.append('内嵌字幕')
+        if movie.uncensored:
+            genre_list.append('无码流出/破解')
 
     # 女优别名固定
     if Cfg().crawler.normalize_actress_name and bool(final_info.actress_pics):
@@ -489,23 +501,25 @@ def RunNormalMode(all_movies):
                 inner_bar.set_description('下载剧照')
                 if movie.info.preview_pics:
                     extrafanartdir = movie.save_dir + '/extrafanart'
-                    os.mkdir(extrafanartdir)
+                    # 重新整理同一部影片时文件夹可能已经存在
+                    os.makedirs(extrafanartdir, exist_ok=True)
                     for (id, pic_url) in enumerate(movie.info.preview_pics):
                         inner_bar.set_description(f"Downloading extrafanart {id} from url: {pic_url}")
-                                                                                                                                
+
                         fanart_destination = f"{extrafanartdir}/{id}.png"
+                        # 单张剧照下载失败不影响影片的整理，记录警告后继续下载下一张
                         try:
                             info = download(pic_url, fanart_destination)
                             if valid_pic(fanart_destination):
-                                filesize = get_fmt_size(pic_path)
-                                width, height = get_pic_size(pic_path)
+                                filesize = get_fmt_size(fanart_destination)
+                                width, height = get_pic_size(fanart_destination)
                                 elapsed = time.strftime("%M:%S", time.gmtime(info['elapsed']))
                                 speed = get_fmt_size(info['rate']) + '/s'
                                 logger.info(f"已下载剧照{pic_url} {id}.png: {width}x{height}, {filesize} [{elapsed}, {speed}]")
                             else:
-                                check_step(False, f"下载剧照{id}: {pic_url}失败")
-                        except:
-                            check_step(False, f"下载剧照{id}: {pic_url}失败")
+                                logger.warning(f"下载剧照{id}失败，图片无效或已损坏: {pic_url}")
+                        except Exception as e:
+                            logger.warning(f"下载剧照{id}失败: {pic_url}: {e!r}")
                         time.sleep(scrape_interval)
                 check_step(True)
 
@@ -523,9 +537,10 @@ def RunNormalMode(all_movies):
             if movie != all_movies[-1] and Cfg().crawler.sleep_after_scraping > Duration(0):
                 time.sleep(Cfg().crawler.sleep_after_scraping.total_seconds())
             return_movies.append(movie)
-        # except Exception as e:
-        #     logger.debug(e, exc_info=True)
-        #     logger.error(f'整理失败: {e}')
+        except Exception as e:
+            # 单部影片整理失败时记录错误并继续整理下一部，避免整个批次中断
+            logger.debug(e, exc_info=True)
+            logger.error(f'整理失败: {e}')
         finally:
             inner_bar.close()
     return return_movies

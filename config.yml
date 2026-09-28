@@ -25,7 +25,7 @@ scanner:
 network:
   # 设置代理服务器地址，支持 http, socks5/socks5h 代理，比如'http://127.0.0.1:1080'
   # null表示禁用代理
-  proxy_server: null
+  proxy_server: 'http://127.0.0.1:7890'
   # 各个站点的免代理地址。地址失效时软件会自动尝试获取新地址，你也可以手动设置
   proxy_free:
     avsox: 'https://avsox.click'
