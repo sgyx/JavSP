@@ -149,7 +149,7 @@ summarizer:
 
 ################################
 translator:
-  # 翻译引擎，可选: google, bing, baidu, claude(haiku), openai （Google可以直接免费使用。留空表示禁用翻译功能）
+  # 翻译引擎，可选: google, bing, baidu, claude, openai （Google可以直接免费使用。留空表示禁用翻译功能）
   # 进阶功能的文档 https://github.com/Yuukiy/JavSP/wiki/Translation-%7C-%E7%BF%BB%E8%AF%91
   engine: null
   ## 使用百度翻译: {{{
@@ -168,8 +168,10 @@ translator:
   ## 使用Claude翻译: {{{
   # engine: 
   #   name: claude
-  #   # Claude的密钥 (使用haiku模型)
+  #   # Claude的密钥
   #   api_key: ''
+  #   # 要使用的模型（可省略，默认为 claude-haiku-4-5；追求翻译质量可改为 claude-sonnet-5 等）
+  #   model: claude-haiku-4-5
   ## }}}
   ## 使用OpenAI翻译: {{{
   # engine: 
@@ -177,8 +179,8 @@ translator:
   #   # OpenAI API（默认使用 Groq，可替换成任何兼容 OpenAI 的第三方 API）
   #   url: 'https://api.groq.com/openai/v1/chat/completions'
   #   api_key: ''
-  #   # 要使用的模型（默认使用 Groq 的 llama-3.1-70b-versatile 模型，若使用 OpenAI 官方 API 的话一般模型为 gpt-3.5-turbo）
-  #   model: llama-3.1-70b-versatile
+  #   # 要使用的模型（需填写服务商支持的模型名，如 Groq 的 llama-3.3-70b-versatile）
+  #   model: llama-3.3-70b-versatile
   ## }}}
   
   # 是否翻译各个字段

@@ -184,6 +184,7 @@ class BingTranslateEngine(BaseConfig):
 class ClaudeTranslateEngine(BaseConfig):
     name: Literal['claude']
     api_key: str
+    model: str = 'claude-haiku-4-5'
 
 class OpenAITranslateEngine(BaseConfig):
     name: Literal['openai']
