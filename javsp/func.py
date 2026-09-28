@@ -44,7 +44,10 @@ def select_folder(default_dir=''):
     window = Tk()
     window.withdraw()
     window.iconbitmap(resource_path('image/JavSP.ico'))
-    path = filedialog.askdirectory(initialdir=default_dir)
+    # 置顶窗口，否则在Windows上对话框可能被控制台窗口挡住，看起来像程序没有反应
+    window.attributes('-topmost', True)
+    path = filedialog.askdirectory(initialdir=default_dir, parent=window)
+    window.destroy()
     if path != '':
         return os.path.normpath(path)
 
@@ -172,8 +175,12 @@ def check_update(allow_check=True, auto_update=True):
         print('=' * display_width)
         print('')
 
-    # 使用pyinstaller打包exe时生成hook，运行时由该hook将版本信息注入到sys中
-    local_version = meta.version('javsp')
+    # 打包exe时需要一并打包javsp的元数据，缺失时跳过检查更新而不是直接崩溃
+    try:
+        local_version = meta.version('javsp')
+    except meta.PackageNotFoundError:
+        logger.debug('未找到javsp的版本信息，跳过检查更新')
+        return
     if local_version == "":
         return
     # 检查更新

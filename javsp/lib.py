@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 
-__all__ = ['re_escape', 'resource_path', 'strftime_to_minutes', 'detect_special_attr']
+__all__ = ['re_escape', 'resource_path', 'user_path', 'strftime_to_minutes', 'detect_special_attr']
 
 
 _special_chars_map = {i: '\\' + chr(i) for i in b'()[]{}?*+|^$\\.'}
@@ -17,8 +17,17 @@ def re_escape(s: str) -> str:
 
 def resource_path(path: str) -> str:
     """获取一个随代码打包的文件在解压后的路径"""
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller单文件模式：资源被解压到临时目录中
+        return os.path.join(sys._MEIPASS, path)
+    return user_path(path)
+
+
+def user_path(path: str) -> str:
+    """获取一个位于程序所在目录、可供用户修改的文件（如配置文件）的路径"""
     if getattr(sys, "frozen", False):
-        return path
+        # 使用exe所在目录而非工作目录，避免从其他目录启动时找不到文件
+        return os.path.join(os.path.dirname(sys.executable), path)
     else:
         path_joined = Path(__file__).parent.parent / path
         return str(path_joined)
