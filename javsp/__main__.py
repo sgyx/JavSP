@@ -26,8 +26,10 @@ pretty_errors.configure(display_link=True)
 
 from javsp.print import TqdmOut
 from javsp.cropper import Cropper, get_cropper
+from javsp.log import setup_logging
 
 
+setup_logging()
 # 将StreamHandler的stream修改为TqdmOut，以与Tqdm协同工作
 root_logger = logging.getLogger()
 for handler in root_logger.handlers:
