@@ -23,8 +23,10 @@ def parse_data(movie: MovieInfo):
 
     cover_tag = html.xpath("//header/div/a[@class='image-link-border']/img")
     if cover_tag:
+        # 图片改为了懒加载，地址存放在data-srcset/data-src中
+        img = cover_tag[0]
         try:
-            srcset = cover_tag[0].get('srcset').split(', ')
+            srcset = (img.get('srcset') or img.get('data-srcset')).split(', ')
             src_set_urls = {}
             for src in srcset:
                 url, width = src.split()
@@ -33,12 +35,14 @@ def parse_data(movie: MovieInfo):
             max_pic = sorted(src_set_urls.items(), key=lambda x:x[0], reverse=True)
             movie.cover = max_pic[0][1]
         except:
-            movie.cover = cover_tag[0].get('src')
+            src = img.get('src')
+            movie.cover = img.get('data-src') if (not src or src.startswith('data:')) else src
+        # 图片地址可能带有'?f=webp'等参数，会返回webp格式的图片，去掉参数以获取原始的jpg图片
+        if movie.cover:
+            movie.cover = movie.cover.split('?')[0]
     body = html.xpath("//section[@class='article-body']")[0]
     title = body.xpath("div/p/text()")[0]
     title = title.replace(f"【{movie.dvdid}】", '')
-    cite_url = body.xpath("div/cite/a/@href")[0]
-    cite_url = cite_url.split('?aff=')[0]
     info = body.xpath("dl[@class='dltable']")[0]
     dt_txt_ls, dd_tags = info.xpath("dt/text()"), info.xpath("dd")
     data = {}

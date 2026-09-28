@@ -25,29 +25,36 @@ def parse_data(movie: MovieInfo):
         raise MovieNotFoundError(__name__, movie.dvdid)
 
     html = resp2html(r)
-    container = html.xpath("//div[@class='col-md-9 px-0']")[0]
-    title = container.xpath("div[@class='col-12 mb-3']/h1/strong/text()")[0]
+    # 现在找不到影片时不再重定向，而是直接返回状态码200的'猜你喜歡'页面，只能通过有无影片资料卡来判断
+    info = html.xpath("//div[contains(@class, 'left-wrapper')]/div[contains(@class, 'card')]/div[@class='card-body']")
+    if not info:
+        raise MovieNotFoundError(__name__, movie.dvdid)
+    info = info[0]
+    container = html.xpath("//div[contains(@class, 'col-md-9')]")[0]
+    # 标题中番号和广告语之间夹杂着大量换行和空格
+    title = container.xpath("div/h1/strong")[0].text_content().strip()
     # 竟然还在标题里插广告，真的疯了。要不是我已经写了抓取器，才懒得维护这个破站
     title = title.replace('  | JAV目錄大全 | 每日更新', '')
-    title = title.replace(' 免費在線看', '').replace(' 免費AV在線看', '')
-    cover_tag = container.xpath("//div[@class='single-video']")
-    if len(cover_tag) > 0:
-        video_tag = cover_tag[0].find('video')
+    title = title.replace(' 免費在線看', '').replace('免費AV在線看', '')
+    # 有在线播放源时封面是播放器的poster，否则是一张普通的图片（FC2影片是JavDB的封面）
+    cover_tag = container.xpath("div/div[@class='single-video']")
+    if cover_tag:
         # URL首尾竟然也有空格……
-        movie.cover = video_tag.get('data-poster').strip()
-        # 预览影片改为blob了，无法获取
-        # movie.preview_video = video_tag.find('source').get('src').strip()
-    else:
-        cover_img_tag = container.xpath("//img[@class='lazy rounded']/@data-src")
-        if cover_img_tag:
-            movie.cover = cover_img_tag[0].strip()
-    info = container.xpath("//div[@class='card-body']")[0]
-    publish_date = info.xpath("div/span[contains(text(), '日期:')]")[0].getnext().text
-    duration = info.xpath("div/span[contains(text(), '時長:')]")[0].getnext().text.replace('分鐘', '')
+        cover = cover_tag[0].xpath("video/@poster | video/@data-poster | img/@src")
+        if cover:
+            movie.cover = cover[0].strip()
+    # 预览影片是JavDB带签名和时间戳的m3u8链接，很快会失效，就不抓了
+    # movie.preview_video = container.xpath("//video[@id='player-preview']/source/@src")
+    publish_date = info.xpath("div/span[contains(text(), '發佈於:')]/following-sibling::span/text()")
+    if publish_date:
+        movie.publish_date = publish_date[0].strip()
+    duration = info.xpath("div/span[contains(text(), '時長:')]/following-sibling::span/text()")
+    if duration:
+        movie.duration = duration[0].replace('分鐘', '').strip()
     producer = info.xpath("div/span[contains(text(), '製作:')]/following-sibling::a/span/text()")
     if producer:
-        movie.producer = producer[0]
-    genre_tags = info.xpath("//a[@class='genre']")
+        movie.producer = producer[0].strip()
+    genre_tags = info.xpath("div/span[contains(text(), '類別:')]/following-sibling::div/a[@class='genre']")
     genre, genre_id = [], []
     for tag in genre_tags:
         items = tag.get('href').split('/')
@@ -55,7 +62,9 @@ def parse_data(movie: MovieInfo):
         genre.append(tag.text.strip())
         genre_id.append(pre_id)
         # genre的链接中含有censored字段，但是无法用来判断影片是否有码，因为完全不可靠……
-    actress = info.xpath("div/span[contains(text(), '女優:')]/following-sibling::*/a/text()") or None
+    # 没有女优信息时显示的是'暫無女優資料'，不带链接，因此只取<a>即可
+    actress = info.xpath("div/span[contains(text(), '女優:')]/following-sibling::div/a[contains(@class, 'actress')]/text()")
+    actress = [i.strip() for i in actress if i.strip()] or None
     magnet_table = container.xpath("//table[contains(@class, 'magnet-table')]/tbody")
     if magnet_table:
         magnet_links = magnet_table[0].xpath("tr/td/a/@href")
@@ -68,8 +77,6 @@ def parse_data(movie: MovieInfo):
     movie.url = url
     movie.title = title.replace(movie.dvdid, '').strip()
     movie.preview_pics = preview_pics
-    movie.publish_date = publish_date
-    movie.duration = duration
     movie.genre = genre
     movie.genre_id = genre_id
     movie.actress = actress

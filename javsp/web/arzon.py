@@ -4,7 +4,7 @@ import sys
 import logging
 import re
 
-from javsp.web.base import request_get
+from javsp.web.base import headers, read_proxy, request_get
 from javsp.web.exceptions import *
 from javsp.datatype import MovieInfo
 import requests
@@ -15,9 +15,10 @@ base_url = "https://www.arzon.jp"
 
 def get_cookie():
     # https://www.arzon.jp/index.php?action=adult_customer_agecheck&agecheck=1&redirect=https%3A%2F%2Fwww.arzon.jp%2F
-    skip_verify_url = "http://www.arzon.jp/index.php?action=adult_customer_agecheck&agecheck=1"
+    # 必须使用https：通过http访问时可能会被劫持并重定向到其他网站
+    skip_verify_url = "https://www.arzon.jp/index.php?action=adult_customer_agecheck&agecheck=1"
     session = requests.Session()
-    session.get(skip_verify_url, timeout=(12, 7))
+    session.get(skip_verify_url, headers=headers, proxies=read_proxy(), timeout=(12, 7))
     return session.cookies.get_dict()
 
 def parse_data(movie: MovieInfo):

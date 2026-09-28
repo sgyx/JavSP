@@ -1,9 +1,10 @@
 """从FC2PPVDB抓取数据"""
+import re
 import logging
 from typing import List
 
 
-from javsp.web.base import get_html
+from javsp.web.base import request_get, resp2html
 from javsp.web.exceptions import *
 from javsp.lib import strftime_to_minutes
 from javsp.datatype import MovieInfo
@@ -22,7 +23,12 @@ def parse_data(movie: MovieInfo):
     fc2_id = id_uc.replace('FC2-', '')
     # 抓取网页
     url = f'{base_url}/articles/{fc2_id}'
-    html = get_html(url)
+    resp = request_get(url, delay_raise=True)
+    # Cloudflare错误1005：站长封禁了当前IP所属的ASN（如各类云服务商/机场的IP段），只能更换IP
+    if resp.status_code == 403 and re.search(rb'error ?code:? *1005', resp.content, re.I):
+        raise SiteBlocked('fc2ppvdb封禁了当前IP所属的ASN(Cloudflare 1005)，请尝试更换为家庭宽带等IP')
+    resp.raise_for_status()
+    html = resp2html(resp)
     container = html.xpath("//div[@class='container lg:px-5 px-2 py-12 mx-auto']/div[1]")
     if len(container) > 0:
         container = container[0]
@@ -37,7 +43,7 @@ def parse_data(movie: MovieInfo):
     publish_date = container.xpath("//div[starts-with(text(),'販売日：')]/span/text()")
     publisher = container.xpath("//div[starts-with(text(),'販売者：')]/span/a/text()")
     uncensored_str = container.xpath("//div[starts-with(text(),'モザイク：')]/span/text()")
-    uncensored_str_f = get_list_first(uncensored_str);
+    uncensored_str_f = get_list_first(uncensored_str)
     uncensored = True if uncensored_str_f == '無' else False if uncensored_str_f == '有' else None
     preview_pics = None
     preview_video = container.xpath("//a[starts-with(text(),'サンプル動画')]/@href")
@@ -47,7 +53,8 @@ def parse_data(movie: MovieInfo):
     movie.title = get_list_first(title)
     movie.genre = genre
     movie.actress = actress
-    movie.duration = str(strftime_to_minutes(get_list_first(duration_str)))
+    duration_str_f = get_list_first(duration_str)
+    movie.duration = str(strftime_to_minutes(duration_str_f)) if duration_str_f else None
     movie.publish_date = get_list_first(publish_date)
     movie.publisher = get_list_first(publisher)
     movie.uncensored = uncensored

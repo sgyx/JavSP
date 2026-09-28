@@ -51,9 +51,13 @@ def parse_data(movie: MovieInfo):
         match = re.search(r'\d+', duration_div[0].tail)
         if match:
             movie.duration = match.group(0)
-    # 仅部分影片有评分且评分只能粗略到星级而没有分数，要通过星级的图片来判断，如'/img/35.gif'表示3.5星
+    # 仅部分影片有评分。评分现在以文本显示（如'平均評価: 3.5'），旧版网页则要通过星级的图片来判断，如'/img/35.gif'表示3.5星
+    score_label = info.xpath("b[text()='平均評価']")
+    score_match = re.search(r'[\d.]+', score_label[0].tail or '') if score_label else None
     score_tag = info.xpath("//b[text()='平均評価']/following-sibling::img/@data-original")
-    if score_tag:
+    if score_match:
+        movie.score = str(float(score_match.group(0)) * 2)
+    elif score_tag:
         score = int(score_tag[0][5:7])/5   # /10*2
         movie.score = str(score)
     serial_tag = info.xpath("a[contains(@href,'/series/')]/text()")

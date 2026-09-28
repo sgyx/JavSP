@@ -1,9 +1,9 @@
 {
   "dvdid": "CND-037",
   "cid": null,
-  "url": "https://www.airav.wiki/video/CND-037",
+  "url": "https://airav.io/video?hid=99-07-20067",
   "plot": null,
-  "cover": "https://wiki-img.airav.wiki/storage/big_pic/99-07-20067.jpg",
+  "cover": "https://airav.io/storage/cover/big/99-07-20067.jpg",
   "big_cover": null,
   "genre": [],
   "genre_id": null,
@@ -23,6 +23,6 @@
   "publisher": null,
   "uncensored": null,
   "publish_date": "2020-10-31",
-  "preview_pics": [],
-  "preview_video": "http://freems5.airav.cc/mv_download/313B10CA071FC910454689BB227D0847/611E6BB3/mv/417137F836FBC097CF313381D102D55B/611E6BB3/0/36000/331522/normal.mp4"
+  "preview_pics": null,
+  "preview_video": "https://cdn-freemsall.iiooxx.rocks/hlsredirect/1obPp_362NhpF7LiamOBSA/1791752399/hls/newair95109/high.3gp/index.m3u8"
 }
