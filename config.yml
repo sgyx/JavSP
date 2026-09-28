@@ -179,8 +179,8 @@ translator:
   #   # OpenAI API（默认使用 Groq，可替换成任何兼容 OpenAI 的第三方 API）
   #   url: 'https://api.groq.com/openai/v1/chat/completions'
   #   api_key: ''
-  #   # 要使用的模型（需填写服务商支持的模型名，如 Groq 的 llama-3.3-70b-versatile）
-  #   model: llama-3.3-70b-versatile
+  #   # 要使用的模型（需填写服务商支持的模型名，如 Groq 的 openai/gpt-oss-120b。服务商会下线旧模型，请以其文档为准）
+  #   model: openai/gpt-oss-120b
   ## }}}
   
   # 是否翻译各个字段
