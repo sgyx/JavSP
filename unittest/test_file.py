@@ -226,3 +226,49 @@ def test_scan_movies__n_video_with_ad(prepare_files):
     assert len(movies) == 2
     assert movies[0].dvdid == 'ABC-123' and movies[1].dvdid == 'DEF-456'
     assert all(len(i.files) == 1 for i in movies)
+
+
+# 同一个番号属于不同的无码片商时，应视为不同的影片（如一本道和カリビアンコムプレミアム都有123119_001）
+@pytest.mark.parametrize('files', [('1pondo_123119_001.mp4', 'caribpr_123119_001.mp4')])
+def test_scan_movies__same_id_different_studios(prepare_files):
+    movies = scan_movies(tmp_folder)
+    assert len(movies) == 2
+    assert {m.dvdid for m in movies} == {'123119_001'}
+    assert {m.studio_hint for m in movies} == {'1pondo', 'caribpr'}
+    for m in movies:
+        assert len(m.files) == 1
+        assert os.path.basename(m.files[0]).startswith(m.studio_hint)
+
+
+# 不同片商的同番号影片位于不同文件夹时，也应视为不同的影片
+@pytest.mark.parametrize('files', [('A/1pondo_123119_001.mp4', 'B/caribpr_123119_001.mp4')])
+def test_scan_movies__same_id_different_studios_in_folders(prepare_files):
+    movies = scan_movies(tmp_folder)
+    assert len(movies) == 2
+    assert {m.studio_hint for m in movies} == {'1pondo', 'caribpr'}
+
+
+# 带有片商名称的多分片影片
+@pytest.mark.parametrize('files', [('1pondo_012717_472-1.mp4', '1pondo_012717_472-2.mp4')])
+def test_scan_movies__studio_slices(prepare_files):
+    movies = scan_movies(tmp_folder)
+    assert len(movies) == 1
+    assert movies[0].dvdid == '012717_472'
+    assert movies[0].studio_hint == '1pondo'
+    basenames = [os.path.basename(i) for i in movies[0].files]
+    assert basenames == ['1pondo_012717_472-1.mp4', '1pondo_012717_472-2.mp4']
+
+
+# 同一片商的同番号影片位于不同文件夹时，仍视为重复影片而略过
+@pytest.mark.parametrize('files', [('A/1pondo_123119_001.mp4', 'B/1pondo_123119_001.mp4')])
+def test_scan_movies__same_studio_duplicates(prepare_files):
+    movies = scan_movies(tmp_folder)
+    assert len(movies) == 0
+
+
+# 部分文件名不带片商名称时，若该番号只对应一个片商，则归入该片商（避免同一部影片被当成两部分别整理）
+@pytest.mark.parametrize('files', [('A/1pondo_012717_472.mp4', 'B/012717_472.mp4')])
+def test_scan_movies__unlabeled_file_joins_only_studio(prepare_files):
+    movies = scan_movies(tmp_folder)
+    # 两个文件被归为同一部影片，但位于不同文件夹，因此按重复影片略过（与没有片商信息时的行为一致）
+    assert len(movies) == 0

@@ -28,8 +28,9 @@ def scan_movies(root: str) -> List[Movie]:
     # 1. 以数字编号最多支持10个分片，字母编号最多支持26个分片
     # 2. 允许分片间的编号有公共的前导符（如编号01, 02, 03），因为求prefix时前导符也会算进去
 
-    # 扫描所有影片文件并获取它们的番号
-    dic = {}    # avid: [abspath1, abspath2...]
+    # 扫描所有影片文件并获取它们的番号。同一个纯数字番号可能属于不同的无码片商（如一本道和カリビアンコムプレミアム
+    # 都有123119_001），因此以 (番号, 片商) 作为区分影片的依据
+    dic = {}    # (avid, studio): [abspath1, abspath2...]
     small_videos = {}
     ignore_folder_name_pattern = re.compile('|'.join(Cfg().scanner.ignored_folder_name_pattern))
     for dirpath, dirnames, filenames in os.walk(root):
@@ -56,10 +57,8 @@ def scan_movies(root: str) -> List[Movie]:
                 # 如果文件名能匹配到cid，那么将cid视为有效id，因为此时dvdid多半是错的
                 avid = cid if cid else dvdid
                 if avid:
-                    if avid in dic:
-                        dic[avid].append(fullpath)
-                    else:
-                        dic[avid] = [fullpath]
+                    key = (avid, get_uncensored_studio(fullpath))
+                    dic.setdefault(key, []).append(fullpath)
                 else:
                     fail = Movie('无法识别番号')
                     fail.files = [fullpath]
@@ -71,8 +70,9 @@ def scan_movies(root: str) -> List[Movie]:
         dvdid = get_id(name)
         cid = get_cid(name)
         avid = cid if cid else dvdid
-        if avid in dic:
-            dic[avid].extend(small_videos.pop(name))
+        key = (avid, get_uncensored_studio(name))
+        if key in dic:
+            dic[key].extend(small_videos.pop(name))
         elif avid:
             has_avid[name] = avid
     # 对于前面忽略的视频生成一个简单的提示
@@ -85,17 +85,25 @@ def scan_movies(root: str) -> List[Movie]:
         else:
             logger.info(f"跳过了{skipped_cnt}个小于指定大小的视频文件")
         logger.debug('跳过的视频文件如下:\n' + '\n'.join(skipped_files))
+    # 部分文件名不带片商名称时，若该番号只对应一个片商，则将其归入该片商，避免同一部影片被当成两部分别整理
+    studios_of_avid = {}
+    for avid, studio in dic:
+        studios_of_avid.setdefault(avid, set()).add(studio)
+    for avid, studios in studios_of_avid.items():
+        labeled = studios - {None}
+        if None in studios and len(labeled) == 1:
+            dic[(avid, labeled.pop())].extend(dic.pop((avid, None)))
     # 检查是否有多部影片对应同一个番号
-    non_slice_dup = {}  # avid: [abspath1, abspath2...]
-    for avid, files in dic.copy().items():
+    non_slice_dup = {}  # (avid, studio): [abspath1, abspath2...]
+    for key, files in dic.copy().items():
         # 一一对应的直接略过
         if len(files) == 1:
             continue
         dirs = set([os.path.split(i)[0] for i in files])
         # 不同位置的多部影片有相同番号时，略过并报错
         if len(dirs) > 1:
-            non_slice_dup[avid] = files
-            del dic[avid]
+            non_slice_dup[key] = files
+            del dic[key]
             continue
         # 提取分片信息（如果正则替换成功，只会剩下单个小写字符）。相关变量都要使用同样的列表生成顺序
         basenames = [os.path.basename(i) for i in files]
@@ -105,7 +113,7 @@ def scan_movies(root: str) -> List[Movie]:
             pattern = re.compile(pattern_expr, flags=re.I)
         except re.error:
             logger.debug(f"正则识别影片分片信息时出错: '{pattern_expr}'")
-            del dic[avid]
+            del dic[key]
             continue
         remaining = [pattern.sub(r'\1', i).lower() for i in basenames]
         postfixes = [i[1:] for i in remaining]
@@ -115,32 +123,32 @@ def scan_movies(root: str) -> List[Movie]:
             # remaining为初步提取的分片信息，不允许有重复值
             or len(slices) != len(set(slices))):
             logger.debug(f"无法识别分片信息: {prefix=}, {remaining=}")
-            non_slice_dup[avid] = files
-            del dic[avid]
+            non_slice_dup[key] = files
+            del dic[key]
             continue
         # 影片编号必须从 0/1/a 开始且编号连续
         sorted_slices = sorted(slices)
         first, last = sorted_slices[0], sorted_slices[-1]
         if (first not in ('0', '1', 'a')) or (ord(last) != (ord(first)+len(sorted_slices)-1)):
             logger.debug(f"无效的分片起始编号或分片编号不连续: {sorted_slices=}")
-            non_slice_dup[avid] = files
-            del dic[avid]
+            non_slice_dup[key] = files
+            del dic[key]
             continue
         # 生成最终的分片信息
         mapped_files = [files[slices.index(i)] for i in sorted_slices]
-        dic[avid] = mapped_files
+        dic[key] = mapped_files
 
     # 汇总输出错误提示信息
     msg = ''
-    for avid, files in non_slice_dup.items():
-        msg += f'{avid}: \n'
+    for (avid, studio), files in non_slice_dup.items():
+        msg += f'{avid} ({studio}): \n' if studio else f'{avid}: \n'
         for f in files:
             msg += ('  ' + os.path.relpath(f, root) + '\n')
     if msg:
         logger.error("下列番号对应多部影片文件且不符合分片规则，已略过整理，请手动处理后重新运行脚本: \n" + msg)
     # 转换数据的组织格式
     movies: List[Movie] = []
-    for avid, files in dic.items():
+    for (avid, studio), files in dic.items():
         src = guess_av_type(avid)
         if src != 'cid':
             mov = Movie(avid)
@@ -150,7 +158,7 @@ def scan_movies(root: str) -> List[Movie]:
             mov.dvdid = get_id(files[0])
         mov.files = files
         mov.data_src = src
-        mov.studio_hint = get_uncensored_studio(files[0])
+        mov.studio_hint = studio
         logger.debug(f'影片数据源类型: {avid}: {src}')
         movies.append(mov)
     return movies
