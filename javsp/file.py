@@ -150,6 +150,7 @@ def scan_movies(root: str) -> List[Movie]:
             mov.dvdid = get_id(files[0])
         mov.files = files
         mov.data_src = src
+        mov.studio_hint = get_uncensored_studio(files[0])
         logger.debug(f'影片数据源类型: {avid}: {src}')
         movies.append(mov)
     return movies

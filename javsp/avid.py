@@ -4,10 +4,33 @@ import re
 from pathlib import Path
 
 
-__all__ = ['get_id', 'get_cid', 'guess_av_type']
+__all__ = ['get_id', 'get_cid', 'guess_av_type', 'get_uncensored_studio']
 
 
 from javsp.config import Cfg
+
+# 无码片商及其在文件名中常见的写法。同一个纯数字番号可能同时存在于多个片商（如'123119_001'），
+# 因此需要借助文件名中的片商名称来确定影片来源。顺序很重要: 先匹配更长/更具体的名称
+UNCENSORED_STUDIOS = [
+    ('caribpr', r'carib(?:bean)?(?:com)?[-_ ]?(?:pr|premium)|カリビアンコムプレミアム'),
+    ('carib', r'carib(?:bean)?(?:com)?|カリビアンコム|加勒比'),
+    ('1pondo', r'1pon(?:do)?|一本道'),
+    ('10musume', r'10mu(?:sume)?|天然むすめ'),
+    ('pacopacomama', r'paco(?:pacomama)?|パコパコママ'),
+    ('muramura', r'muramura|ムラムラ'),
+]
+# 各片商官网使用的番号分隔符（加勒比使用'-'，其他片商使用'_'）
+UNCENSORED_SEPARATOR = {'carib': '-'}
+
+
+def get_uncensored_studio(filepath_str: str):
+    """根据文件名判断无码影片所属的片商，无法判断时返回None"""
+    stem = Path(filepath_str).stem
+    for studio, pattern in UNCENSORED_STUDIOS:
+        if re.search(pattern, stem, re.I):
+            return studio
+    return None
+
 
 def get_id(filepath_str: str) -> str:
     """从给定的文件路径中提取番号（DVD ID）"""
@@ -38,6 +61,12 @@ def get_id(filepath_str: str) -> str:
             return '259LUXU-' + match.group(1)
 
     else:
+        # 文件名中带有无码片商名称时，按片商的番号格式匹配，否则片商名会被误识别为番号的字母部分（如'1pondo_012717_472'）
+        studio = get_uncensored_studio(filepath_str)
+        if studio:
+            match = re.search(r'(?<!\d)(\d{6})[-_ ]?(\d{2,4})(?!\d)', norm)
+            if match:
+                return match.group(1) + UNCENSORED_SEPARATOR.get(studio, '_') + match.group(2)
         # 先尝试移除可疑域名进行匹配，如果匹配不到再使用原始文件名进行匹配
         no_domain = re.sub(r'\w{3,10}\.(COM|NET|APP|XYZ)', '', norm, flags=re.I)
         if no_domain != norm:

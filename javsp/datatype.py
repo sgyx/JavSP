@@ -23,9 +23,12 @@ class MovieInfo:
         arg_count = len([i for i in [dvdid, cid, from_file] if i])
         if arg_count != 1:
             raise TypeError(f'Require 1 parameter but {arg_count} given')
+        # 无码影片所属片商的提示（由文件名推断），供官网抓取器选择要查询的站点。以'_'开头，不参与数据汇总和序列化
+        self._studio_hint = None
         if isinstance(dvdid, Movie):
             self.dvdid = dvdid.dvdid
             self.cid = dvdid.cid
+            self._studio_hint = dvdid.studio_hint
         else:
             self.dvdid = dvdid      # DVD ID，即通常的番号
             self.cid = cid          # DMM Content ID
@@ -60,7 +63,7 @@ class MovieInfo:
                 raise TypeError(f"Invalid file path: '{from_file}'")
 
     def __str__(self) -> str:
-        d = vars(self)
+        d = {k: v for k, v in vars(self).items() if not k.startswith('_')}
         return json.dumps(d, indent=2, ensure_ascii=False)
 
     def __repr__(self) -> str:
@@ -136,6 +139,7 @@ class Movie:
         self.cid = cid                  # DMM Content ID
         self.files = []                 # 关联到此番号的所有影片文件的列表（用于管理带有多个分片的影片）
         self.data_src = 'normal'        # 数据源：不同的数据源将使用不同的爬虫
+        self.studio_hint = None         # 无码影片所属片商的提示（由文件名推断，如'1pondo'、'carib'）
         self.info: MovieInfo = None     # 抓取到的影片信息
         self.save_dir = None            # 存放影片、封面、NFO的文件夹路径
         self.basename = None            # 按照命名模板生成的不包含路径和扩展名的basename

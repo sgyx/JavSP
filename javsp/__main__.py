@@ -45,7 +45,7 @@ from javsp.web.base import download
 from javsp.web.exceptions import *
 from javsp.web.translate import translate_movie_info
 
-from javsp.config import Cfg, CrawlerID
+from javsp.config import Cfg, CrawlerID, UseJavDBCover
 from javsp.prompt import prompt
 
 actressAliasMap = {}
@@ -159,8 +159,7 @@ def parallel_crawler(movie: Movie, tqdm_bar=None):
     all_info = {k:v for k,v in all_info.items() if hasattr(v, 'success')}
     for info in all_info.values():
         del info.success
-    # 删除all_info中键名中的'web.'
-    all_info = {k[4:]:v for k,v in all_info.items()}
+    # 注意: all_info的键名已经是抓取器的名称（如'javdb'），不能再截取（旧版本的键名形如'web.javdb'）
     return all_info
 
 
