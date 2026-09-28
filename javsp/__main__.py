@@ -4,6 +4,7 @@ import sys
 import json
 import time
 import logging
+import multiprocessing
 from PIL import Image
 from pydantic import ValidationError
 from pydantic_extra_types.pendulum_dt import Duration
@@ -704,4 +705,6 @@ def entry():
     sys.exit(0)
 
 if __name__ == "__main__":
+    # 打包为exe后，multiprocessing的子进程会重新运行exe本身，需要由此处拦截
+    multiprocessing.freeze_support()
     entry()

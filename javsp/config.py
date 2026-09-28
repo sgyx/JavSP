@@ -1,3 +1,5 @@
+import os
+import shutil
 from argparse import ArgumentParser, RawTextHelpFormatter
 from enum import Enum
 from typing import Dict, List, Literal, TypeAlias, Union
@@ -7,7 +9,7 @@ from pydantic_extra_types.pendulum_dt import Duration
 from pydantic_core import Url
 from pathlib import Path
 
-from javsp.lib import resource_path
+from javsp.lib import resource_path, user_path
 
 class Scanner(BaseConfig):
     ignored_id_pattern: List[str]
@@ -228,7 +230,11 @@ def get_config_source():
     args, _ = parser.parse_known_args()
     sources = []
     if args.config is None:
-        args.config = resource_path('config.yml')
+        args.config = user_path('config.yml')
+        # 单文件exe只随包带了默认配置，首次运行时将其复制到exe旁边供用户修改
+        if not os.path.exists(args.config):
+            shutil.copyfile(resource_path('config.yml'), args.config)
+            print(f"已生成默认配置文件: {args.config}")
     sources.append(FileSource(file=args.config))
     sources.append(EnvSource(prefix='JAVSP_', allow_all=True))
     sources.append(CLArgSource(prefix='o'))
