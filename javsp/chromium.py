@@ -41,6 +41,10 @@ def get_browsers_cookies():
         'Edge':          '/Microsoft/Edge/User Data',
         'Vivaldi':       '/Vivaldi/User Data'
     }
+    # 浏览器Cookies的解密依赖Windows的DPAPI，其他系统上的Cookies加密方式不同，暂不支持
+    if sys.platform != 'win32':
+        logger.info('目前仅支持读取Windows上的浏览器Cookies，将以未登录状态访问JavDB')
+        return []
     LocalAppDataDir = os.getenv('LOCALAPPDATA')
     all_browser_cookies = []
     exceptions = []

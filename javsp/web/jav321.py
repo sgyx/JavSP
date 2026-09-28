@@ -3,7 +3,7 @@ import re
 import logging
 
 
-from javsp.web.base import post_html
+from javsp.web.base import post_html, xpath_first
 from javsp.web.exceptions import *
 from javsp.datatype import MovieInfo
 
@@ -15,14 +15,21 @@ base_url = 'https://www.jav321.com'
 def parse_data(movie: MovieInfo):
     """解析指定番号的影片数据"""
     html = post_html(f'{base_url}/search', data={'sn': movie.dvdid})
-    page_url = html.xpath("//ul[@class='dropdown-menu']/li/a/@href")[0]
+    page_url = xpath_first(html, "//ul[@class='dropdown-menu']/li/a/@href")
+    if page_url is None:
+        raise WebsiteError(f'jav321: 网页结构可能已变化，找不到影片链接: {movie.dvdid}')
     #TODO: 注意cid是dmm的概念。如果影片来自MGSTAGE，这里的cid很可能是jav321自己添加的，例如 345SIMM-542
     cid = page_url.split('/')[-1]   # /video/ipx00177
     # 如果从URL匹配到的cid是'search'，说明还停留在搜索页面，找不到这部影片
     if cid == 'search':
         raise MovieNotFoundError(__name__, movie.dvdid)
-    title = html.xpath("//div[@class='panel-heading']/h3/text()")[0]
-    info = html.xpath("//div[@class='col-md-9']")[0]
+    # 标题和信息栏是必需的，缺失时说明网页结构已变化
+    title = xpath_first(html, "//div[@class='panel-heading']/h3/text()")
+    if title is None:
+        raise WebsiteError(f'jav321: 网页结构可能已变化，找不到标题: {page_url}')
+    info = xpath_first(html, "//div[@class='col-md-9']")
+    if info is None:
+        raise WebsiteError(f'jav321: 网页结构可能已变化，找不到影片信息: {page_url}')
     # jav321的不同信息字段间没有明显分隔，只能通过url来匹配目标标签
     company_tags = info.xpath("a[contains(@href,'/company/')]/text()")
     if company_tags:
@@ -32,7 +39,9 @@ def parse_data(movie: MovieInfo):
     actress, actress_pics = [], {}
     actress_tags = html.xpath("//div[@class='thumbnail']/a[contains(@href,'/star/')]/img")
     for tag in actress_tags:
-        name = tag.tail.strip()
+        name = (tag.tail or '').strip()
+        if not name:
+            continue
         pic_url = tag.get('src')
         actress.append(name)
         # jav321的女优头像完全是应付了事：即使女优实际没有头像，也会有一个看起来像模像样的url，
@@ -42,24 +51,34 @@ def parse_data(movie: MovieInfo):
     genre_tags = info.xpath("a[contains(@href,'/genre/')]")
     genre, genre_id = [], []
     for tag in genre_tags:
+        if not tag.text:
+            continue
+        # genre和genre_id需要一一对应，因此无法解析id时用None占位
+        href_parts = (tag.get('href') or '').split('/')
         genre.append(tag.text)
-        genre_id.append(tag.get('href').split('/')[-2]) # genre/4025/1
-    dvdid = info.xpath("b[text()='品番']")[0].tail.replace(': ', '').upper()
-    publish_date = info.xpath("b[text()='配信開始日']")[0].tail.replace(': ', '')
+        genre_id.append(href_parts[-2] if len(href_parts) >= 2 else None) # genre/4025/1
+    # 品番和发布日期以'<b>品番</b>: XXX'的形式存储在b标签的tail中
+    dvdid_label = xpath_first(info, "b[text()='品番']")
+    dvdid = (dvdid_label.tail or '').replace(': ', '').upper() if dvdid_label is not None else ''
+    date_label = xpath_first(info, "b[text()='配信開始日']")
+    publish_date = (date_label.tail or '').replace(': ', '') if date_label is not None else ''
     duration_div = info.xpath("b[text()='収録時間']")
     if duration_div:
-        match = re.search(r'\d+', duration_div[0].tail)
+        match = re.search(r'\d+', duration_div[0].tail or '')
         if match:
             movie.duration = match.group(0)
     # 仅部分影片有评分。评分现在以文本显示（如'平均評価: 3.5'），旧版网页则要通过星级的图片来判断，如'/img/35.gif'表示3.5星
     score_label = info.xpath("b[text()='平均評価']")
     score_match = re.search(r'[\d.]+', score_label[0].tail or '') if score_label else None
     score_tag = info.xpath("//b[text()='平均評価']/following-sibling::img/@data-original")
-    if score_match:
-        movie.score = str(float(score_match.group(0)) * 2)
-    elif score_tag:
-        score = int(score_tag[0][5:7])/5   # /10*2
-        movie.score = str(score)
+    try:
+        if score_match:
+            movie.score = str(float(score_match.group(0)) * 2)
+        elif score_tag:
+            score = int(score_tag[0][5:7])/5   # /10*2
+            movie.score = str(score)
+    except ValueError:
+        logger.debug(f'jav321: 无法解析评分: {page_url}')
     serial_tag = info.xpath("a[contains(@href,'/series/')]/text()")
     if serial_tag:
         movie.serial = serial_tag[0]
@@ -79,13 +98,16 @@ def parse_data(movie: MovieInfo):
 
     movie.url = page_url
     movie.cid = cid
-    movie.dvdid = dvdid
+    # 页面上没有品番时保留原有的dvdid
+    if dvdid:
+        movie.dvdid = dvdid
     movie.title = title
     movie.actress = actress
     movie.actress_pics = actress_pics
     movie.genre = genre
     movie.genre_id = genre_id
-    movie.publish_date = publish_date
+    if publish_date:
+        movie.publish_date = publish_date
     # preview_pics的第一张图始终是封面，剩下的才是预览图
     if len(preview_pics) > 0:
         movie.cover = preview_pics[0]

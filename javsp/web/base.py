@@ -18,7 +18,7 @@ from javsp.config import Cfg
 from javsp.web.exceptions import *
 
 
-__all__ = ['Request', 'get_html', 'post_html', 'request_get', 'resp2html', 'is_connectable', 'download', 'get_resp_text', 'read_proxy']
+__all__ = ['Request', 'get_html', 'post_html', 'request_get', 'resp2html', 'is_connectable', 'download', 'get_resp_text', 'read_proxy', 'xpath_first']
 
 
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'}
@@ -136,6 +136,12 @@ def request_post(url, data, cookies={}, timeout=None, delay_raise=False):
     if not delay_raise:
         r.raise_for_status()
     return r
+
+
+def xpath_first(node, path, default=None):
+    """返回xpath匹配到的第一个结果，没有匹配时返回default（用于可选字段，避免页面缺少某个字段时抛出IndexError）"""
+    result = node.xpath(path)
+    return result[0] if result else default
 
 
 def get_resp_text(resp: Response, encoding=None):

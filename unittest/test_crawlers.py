@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import pytest
 import requests
 from urllib.parse import urlsplit
 
@@ -50,8 +51,8 @@ def compare(avid, scraper, file):
     try:
         parse_data(online)
     except SiteBlocked as e:
-        logger.warning(e)
-        return
+        # 被站点封锁时无法判断抓取器是否正常，标记为跳过而不是通过
+        pytest.skip(str(e))
     except (CrawlerError, requests.exceptions.ReadTimeout) as e:
         logger.info(e)
 

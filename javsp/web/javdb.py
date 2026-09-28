@@ -3,7 +3,7 @@ import os
 import re
 import logging
 
-from javsp.web.base import Request, resp2html
+from javsp.web.base import Request, resp2html, xpath_first
 from javsp.web.exceptions import *
 from javsp.func import *
 from javsp.avid import guess_av_type
@@ -12,9 +12,11 @@ from javsp.datatype import MovieInfo, GenreMap
 from javsp.chromium import get_browsers_cookies
 
 
-# 初始化Request实例。使用scraper绕过CloudFlare后，需要指定网页语言，否则可能会返回其他语言网页，影响解析
-request = Request(use_scraper=True)
-request.headers['Accept-Language'] = 'zh-CN,zh;q=0.9,zh-TW;q=0.8,en-US;q=0.7,en;q=0.6,ja;q=0.5'
+# 初始化Request实例。需要指定网页语言，否则可能会返回其他语言网页，影响解析
+# 注意: 不再使用cloudscraper，JavDB的CloudFlare现在反而会拦截cloudscraper的请求（403 Just a moment），普通请求则可以正常访问
+request = Request()
+accept_language = 'zh-CN,zh;q=0.9,zh-TW;q=0.8,en-US;q=0.7,en;q=0.6,ja;q=0.5'
+request.headers['Accept-Language'] = accept_language
 
 logger = logging.getLogger(__name__)
 genre_map = GenreMap('data/genre_javdb.csv')
@@ -44,8 +46,9 @@ def get_html_wrapper(url):
                     cookies_pool = []
             if len(cookies_pool) > 0:
                 item = cookies_pool.pop()
-                # 更换Cookies时需要创建新的request实例，否则cloudscraper会保留它内部第一次发起网络访问时获得的Cookies
-                request = Request(use_scraper=True)
+                # 更换Cookies时创建新的request实例，避免沿用之前的请求设置
+                request = Request()
+                request.headers['Accept-Language'] = accept_language
                 request.cookies = item['cookies']
                 cookies_source = (item['profile'], item['site'])
                 logger.debug(f'未携带有效Cookies而发生重定向，尝试更换Cookies为: {cookies_source}')
@@ -108,7 +111,8 @@ def parse_data(movie: MovieInfo):
         movie (MovieInfo): 要解析的影片信息，解析后的信息直接更新到此变量内
     """
     # JavDB搜索番号时会有多个搜索结果，从中查找匹配番号的那个
-    html = get_html_wrapper(f'{base_url}/search?q={movie.dvdid}')
+    search_url = f'{base_url}/search?q={movie.dvdid}'
+    html = get_html_wrapper(search_url)
     ids = list(map(str.lower, html.xpath("//div[@class='video-title']/strong/text()")))
     movie_urls = html.xpath("//a[@class='box']/@href")
     match_count = len([i for i in ids if i == movie.dvdid.lower()])
@@ -116,30 +120,74 @@ def parse_data(movie: MovieInfo):
         raise MovieNotFoundError(__name__, movie.dvdid, ids)
     elif match_count == 1:
         index = ids.index(movie.dvdid.lower())
+        # 番号列表与链接列表数量不一致时说明搜索结果的结构已变化
+        if index >= len(movie_urls):
+            raise WebsiteError(f'JavDB: 网页结构可能已变化，找不到搜索结果的链接: {search_url}')
         new_url = movie_urls[index]
         try:
             html2 = get_html_wrapper(new_url)
         except (SitePermissionError, CredentialError):
             # 不开VIP不让看，过分。决定榨出能获得的信息，毕竟有时候只有这里能找到标题和封面
-            box = html.xpath("//a[@class='box']")[index]
-            movie.url = new_url
-            movie.title = box.get('title')
-            movie.cover = box.xpath("div/img/@src")[0]
-            score_str = box.xpath("div[@class='score']/span/span")[0].tail
-            score = re.search(r'([\d.]+)分', score_str).group(1)
-            movie.score = "{:.2f}".format(float(score)*2)
-            movie.publish_date = box.xpath("div[@class='meta']/text()")[0].strip()
+            boxes = html.xpath("//a[@class='box']")
+            if index >= len(boxes):
+                raise WebsiteError(f'JavDB: 网页结构可能已变化，找不到搜索结果: {search_url}')
+            parse_search_box(movie, boxes[index], new_url)
             return
     else:
         raise MovieDuplicateError(__name__, movie.dvdid, match_count)
 
-    container = html2.xpath("/html/body/section/div/div[@class='video-detail']")[0]
-    info = container.xpath("//nav[@class='panel movie-panel-info']")[0]
-    title = container.xpath("h2/strong[@class='current-title']/text()")[0]
+    parse_detail(movie, html2, new_url)
+
+
+def parse_score(score_str):
+    """从形如'4.5分, 由xx人評價'的文本中解析评分并转换为10分制，解析失败时返回None"""
+    if not score_str:
+        return None
+    match = re.search(r'([\d.]+)分', score_str)
+    if not match:
+        return None
+    try:
+        return "{:.2f}".format(float(match.group(1))*2)
+    except ValueError:
+        return None
+
+
+def parse_search_box(movie: MovieInfo, box, url):
+    """从搜索结果中的影片条目提取有限的信息（用于仅VIP可见的影片）"""
+    movie.url = url
+    movie.title = (box.get('title') or '').strip() or None
+    movie.cover = xpath_first(box, "div/img/@src")
+    score_tag = xpath_first(box, "div[@class='score']/span/span")
+    if score_tag is not None:
+        movie.score = parse_score(score_tag.tail)
+    publish_date = xpath_first(box, "div[@class='meta']/text()")
+    if publish_date is not None:
+        movie.publish_date = publish_date.strip()
+
+
+def get_info_value(info, label):
+    """获取信息面板中指定标签(如'導演:')后的值节点，找不到时返回None"""
+    tag = xpath_first(info, f"div/strong[text()='{label}']")
+    return tag.getnext() if tag is not None else None
+
+
+def parse_detail(movie: MovieInfo, html, url):
+    """解析影片详情页，解析后的信息直接更新到movie内"""
+    container = xpath_first(html, "/html/body/section/div/div[@class='video-detail']")
+    if container is None:
+        raise WebsiteError(f'JavDB: 网页结构可能已变化，找不到影片信息容器: {url}')
+    info = xpath_first(container, "//nav[@class='panel movie-panel-info']")
+    if info is None:
+        raise WebsiteError(f'JavDB: 网页结构可能已变化，找不到影片信息面板: {url}')
+    title = xpath_first(container, "h2/strong[@class='current-title']/text()")
+    if title is None:
+        raise WebsiteError(f'JavDB: 网页结构可能已变化，找不到标题: {url}')
     show_orig_title = container.xpath("//a[contains(@class, 'meta-link') and not(contains(@style, 'display: none'))]")
     if show_orig_title:
-        movie.ori_title = container.xpath("h2/span[@class='origin-title']/text()")[0]
-    cover = container.xpath("//img[@class='video-cover']/@src")[0]
+        ori_title = xpath_first(container, "h2/span[@class='origin-title']/text()")
+        if ori_title is not None:
+            movie.ori_title = ori_title
+    cover = xpath_first(container, "//img[@class='video-cover']/@src")
     preview_pics = container.xpath("//a[@class='tile-item'][@data-fancybox='gallery']/@href")
     preview_video_tag = container.xpath("//video[@id='preview-video']/source/@src")
     if preview_video_tag:
@@ -147,48 +195,64 @@ def parse_data(movie: MovieInfo):
         if preview_video.startswith('//'):
             preview_video = 'https:' + preview_video
         movie.preview_video = preview_video
-    dvdid = info.xpath("div/span")[0].text_content()
-    publish_date = info.xpath("div/strong[text()='日期:']")[0].getnext().text
-    duration = info.xpath("div/strong[text()='時長:']")[0].getnext().text.replace('分鍾', '').strip()
-    director_tag = info.xpath("div/strong[text()='導演:']")
-    if director_tag:
-        movie.director = director_tag[0].getnext().text_content().strip()
+    # 找不到网页上的番号时沿用原有番号
+    dvdid_tag = xpath_first(info, "div/span")
+    dvdid = dvdid_tag.text_content() if dvdid_tag is not None else movie.dvdid
+    date_tag = get_info_value(info, '日期:')
+    publish_date = date_tag.text if date_tag is not None else None
+    duration_tag = get_info_value(info, '時長:')
+    duration = None
+    if duration_tag is not None and duration_tag.text is not None:
+        duration = duration_tag.text.replace('分鍾', '').strip()
+    director_tag = get_info_value(info, '導演:')
+    if director_tag is not None:
+        movie.director = director_tag.text_content().strip()
     av_type = guess_av_type(movie.dvdid)
     if av_type != 'fc2':
-        producer_tag = info.xpath("div/strong[text()='片商:']")
+        producer_tag = get_info_value(info, '片商:')
     else:
-        producer_tag = info.xpath("div/strong[text()='賣家:']")
-    if producer_tag:
-        movie.producer = producer_tag[0].getnext().text_content().strip()
-    publisher_tag = info.xpath("div/strong[text()='發行:']")
-    if publisher_tag:
-        movie.publisher = publisher_tag[0].getnext().text_content().strip()
-    serial_tag = info.xpath("div/strong[text()='系列:']")
-    if serial_tag:
-        movie.serial = serial_tag[0].getnext().text_content().strip()
-    score_tag = info.xpath("//span[@class='score-stars']")
-    if score_tag:
-        score_str = score_tag[0].tail
-        score = re.search(r'([\d.]+)分', score_str).group(1)
-        movie.score = "{:.2f}".format(float(score)*2)
+        producer_tag = get_info_value(info, '賣家:')
+    if producer_tag is not None:
+        movie.producer = producer_tag.text_content().strip()
+    publisher_tag = get_info_value(info, '發行:')
+    if publisher_tag is not None:
+        movie.publisher = publisher_tag.text_content().strip()
+    serial_tag = get_info_value(info, '系列:')
+    if serial_tag is not None:
+        movie.serial = serial_tag.text_content().strip()
+    score_tag = xpath_first(info, "//span[@class='score-stars']")
+    if score_tag is not None:
+        score = parse_score(score_tag.tail)
+        if score is not None:
+            movie.score = score
     genre_tags = info.xpath("//strong[text()='類別:']/../span/a")
     genre, genre_id = [], []
     for tag in genre_tags:
-        pre_id = tag.get('href').split('/')[-1]
+        href = tag.get('href')
+        if not href:
+            continue
+        pre_id = href.split('/')[-1]
         genre.append(tag.text)
         genre_id.append(pre_id)
         # 判定影片有码/无码
         subsite = pre_id.split('?')[0]
         movie.uncensored = {'uncensored': True, 'tags':False}.get(subsite)
     # JavDB目前同时提供男女优信息，根据用来标识性别的符号筛选出女优
-    actors_tag = info.xpath("//strong[text()='演員:']/../span")[0]
-    all_actors = actors_tag.xpath("a/text()")
-    genders = actors_tag.xpath("strong/text()")
-    actress = [i for i in all_actors if genders[all_actors.index(i)] == '♀']
-    magnet = container.xpath("//div[@class='magnet-name column is-four-fifths']/a/@href")
+    actress = None
+    actors_tag = xpath_first(info, "//strong[text()='演員:']/../span")
+    if actors_tag is not None:
+        all_actors = actors_tag.xpath("a/text()")
+        genders = actors_tag.xpath("strong/text()")
+        if genders:
+            actress = [i for i, g in zip(all_actors, genders) if g == '♀']
+        else:
+            # 网页上没有性别符号时（如未登录），改为根据女优链接的class筛选
+            actress = actors_tag.xpath("a[contains(@class, 'actor-female')]/text()")
+    # 磁力链接所在元素的class曾为'magnet-name column is-four-fifths'，现在只有'magnet-name'，两种都要匹配
+    magnet = container.xpath("//div[contains(concat(' ', normalize-space(@class), ' '), ' magnet-name ')]/a/@href")
 
     movie.dvdid = dvdid
-    movie.url = new_url.replace(base_url, permanent_url)
+    movie.url = url.replace(base_url, permanent_url)
     movie.title = title.replace(dvdid, '').strip()
     movie.cover = cover
     movie.preview_pics = preview_pics

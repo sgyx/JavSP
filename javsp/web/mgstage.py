@@ -1,9 +1,10 @@
 """从蚊香社-mgstage抓取数据"""
 import re
 import logging
+import requests
 
 
-from javsp.web.base import Request, resp2html
+from javsp.web.base import Request, resp2html, xpath_first
 from javsp.web.exceptions import *
 from javsp.config import Cfg
 from javsp.datatype import MovieInfo
@@ -28,34 +29,47 @@ def parse_data(movie: MovieInfo):
 
     html = resp2html(resp)
     # mgstage的文本中含有大量的空白字符（'\n \t'），需要使用strip去除
-    title = html.xpath("//div[@class='common_detail_cover']/h1/text()")[0].strip()
-    container = html.xpath("//div[@class='detail_left']")[0]
-    cover = container.xpath("//a[@id='EnlargeImage']/@href")[0]
+    # 标题和详情容器是必需的，缺失时说明网页结构已变化
+    title_text = xpath_first(html, "//div[@class='common_detail_cover']/h1/text()")
+    if title_text is None:
+        raise WebsiteError(f'mgstage: 网页结构可能已变化，找不到标题: {url}')
+    title = title_text.strip()
+    container = xpath_first(html, "//div[@class='detail_left']")
+    if container is None:
+        raise WebsiteError(f'mgstage: 网页结构可能已变化，找不到影片信息: {url}')
+    # 以下均为可选字段，缺失时保持为空
+    cover = xpath_first(container, "//a[@id='EnlargeImage']/@href")
     # 有链接的女优和仅有文本的女优匹配方法不同，因此分别匹配以后合并列表
     actress_text = container.xpath("//th[text()='出演：']/following-sibling::td/text()")
     actress_link = container.xpath("//th[text()='出演：']/following-sibling::td/a/text()")
     actress = [i.strip() for i in actress_text + actress_link]
     actress = [i for i in actress if i]     # 移除空字符串
-    producer = container.xpath("//th[text()='メーカー：']/following-sibling::td/a/text()")[0].strip()
-    duration_str = container.xpath("//th[text()='収録時間：']/following-sibling::td/text()")[0]
-    match = re.search(r'\d+', duration_str)
+    producer = xpath_first(container, "//th[text()='メーカー：']/following-sibling::td/a/text()")
+    if producer is not None:
+        producer = producer.strip()
+    duration_str = xpath_first(container, "//th[text()='収録時間：']/following-sibling::td/text()")
+    match = re.search(r'\d+', duration_str) if duration_str else None
     if match:
         movie.duration = match.group(0)
-    dvdid = container.xpath("//th[text()='品番：']/following-sibling::td/text()")[0]
-    date_str = container.xpath("//th[text()='配信開始日：']/following-sibling::td/text()")[0]
-    publish_date = date_str.replace('/', '-')
+    dvdid = xpath_first(container, "//th[text()='品番：']/following-sibling::td/text()")
+    date_str = xpath_first(container, "//th[text()='配信開始日：']/following-sibling::td/text()")
+    publish_date = date_str.replace('/', '-') if date_str is not None else None
     serial_tag = container.xpath("//th[text()='シリーズ：']/following-sibling::td/a/text()")
     if serial_tag:
         movie.serial = serial_tag[0].strip()
     # label: 大意是某个系列策划用同样的番号，例如ABS打头的番号label是'ABSOLUTELY PERFECT'，暂时用不到
     # label = container.xpath("//th[text()='レーベル：']/following-sibling::td/text()")[0].strip()
     genre_tags = container.xpath("//th[text()='ジャンル：']/following-sibling::td/a")
-    genre = [i.text.strip() for i in genre_tags]
-    score_str = container.xpath("//td[@class='review']/span")[0].tail.strip()
+    genre = [i.text.strip() for i in genre_tags if i.text]
+    score_tag = xpath_first(container, "//td[@class='review']/span")
+    score_str = (score_tag.tail or '').strip() if score_tag is not None else ''
     match = re.search(r'^[\.\d]+', score_str)
     if match:
-        score = float(match.group()) * 2
-        movie.score = f'{score:.2f}'
+        try:
+            score = float(match.group()) * 2
+            movie.score = f'{score:.2f}'
+        except ValueError:  # 例如匹配到了'..'
+            logger.debug(f"mgstage: 无法解析评分: '{score_str}'")
     # plot可能含有嵌套格式，为了保留plot中的换行关系，手动处理plot中的各个标签
     plots = []
     plot_p_tags = container.xpath("//dl[@id='introduction']/dd/p[not(@class='more')]")
@@ -66,7 +80,8 @@ def parse_data(movie: MovieInfo):
             plots.append(p.text_content())
             continue
         for child in children:
-            if child.tag == 'br' and plots[-1] != '\n':
+            # plots为空时（以<br>开头）不需要插入换行
+            if child.tag == 'br' and plots and plots[-1] != '\n':
                 plots.append('\n')
             else:
                 if child.text:
@@ -78,17 +93,25 @@ def parse_data(movie: MovieInfo):
 
     if Cfg().crawler.hardworking:
         # 预览视频是点击按钮后再加载的，不在静态网页中
-        btn_url = container.xpath("//a[@class='button_sample']/@href")[0]
-        video_pid = btn_url.split('/')[-1]
-        req_url = f'{base_url}/sampleplayer/sampleRespons.php?pid={video_pid}'
-        resp = request.get(req_url).json()
-        video_url = resp.get('url')
-        if video_url:
-            # /sample/shirouto/siro/3093/SIRO-3093_sample.ism/request?uid=XXX&amp;pid=XXX
-            preview_video = video_url.split('.ism/')[0] + '.mp4'
-            movie.preview_video = preview_video
+        btn_url = xpath_first(container, "//a[@class='button_sample']/@href")
+        if btn_url:
+            video_pid = btn_url.split('/')[-1]
+            req_url = f'{base_url}/sampleplayer/sampleRespons.php?pid={video_pid}'
+            # 预览视频只是附加信息，获取失败时不应影响其他字段
+            try:
+                resp = request.get(req_url).json()
+            except (requests.exceptions.RequestException, ValueError) as e:
+                logger.debug(f'mgstage: 获取预览视频失败: {e}')
+                resp = None
+            video_url = resp.get('url') if isinstance(resp, dict) else None
+            if video_url and isinstance(video_url, str):
+                # /sample/shirouto/siro/3093/SIRO-3093_sample.ism/request?uid=XXX&amp;pid=XXX
+                preview_video = video_url.split('.ism/')[0] + '.mp4'
+                movie.preview_video = preview_video
 
-    movie.dvdid = dvdid
+    # 页面上没有品番时保留原有的dvdid
+    if dvdid is not None:
+        movie.dvdid = dvdid
     movie.url = url
     movie.title = title
     movie.cover = cover

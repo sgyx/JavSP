@@ -1,5 +1,6 @@
 """从JavBus抓取数据"""
 import logging
+import lxml.html
 
 
 from javsp.web.base import *
@@ -35,33 +36,57 @@ def parse_data(movie: MovieInfo):
     if page_title and page_title[0].startswith('404 Page Not Found!'):
         raise MovieNotFoundError(__name__, movie.dvdid)
 
-    container = html.xpath("//div[@class='container']")[0]
-    title = container.xpath("h3/text()")[0]
-    cover = container.xpath("//a[@class='bigImage']/img/@src")[0]
+    movie.url = f'{permanent_url}/{movie.dvdid}'
+    parse_movie_page(movie, html)
+
+
+def _label_next_text(info, label):
+    """获取'導演:'等标签后面紧跟的元素的文本，不存在时返回None"""
+    tag = xpath_first(info, f"p/span[text()='{label}']")
+    next_tag = tag.getnext() if tag is not None else None
+    return next_tag.text if next_tag is not None else None
+
+
+def _label_tail_text(info, label):
+    """获取'發行日期:'等标签后面的文本，不存在时返回None"""
+    tag = xpath_first(info, f"p/span[text()='{label}']")
+    return tag.tail.strip() if (tag is not None and tag.tail) else None
+
+
+def parse_movie_page(movie: MovieInfo, html):
+    """解析影片页面。只有标题是必需的，其他字段在网页中缺失时直接跳过"""
+    container = xpath_first(html, "//div[@class='container']")
+    title = xpath_first(container, "h3/text()") if container is not None else None
+    if title is None:
+        raise WebsiteError(f'JavBus: 网页结构可能已变化，找不到标题: {movie.url}')
+    cover = xpath_first(container, "//a[@class='bigImage']/img/@src")
     preview_pics = container.xpath("//div[@id='sample-waterfall']/a/@href")
-    info = container.xpath("//div[@class='col-md-3 info']")[0]
-    dvdid = info.xpath("p/span[text()='識別碼:']")[0].getnext().text
-    publish_date = info.xpath("p/span[text()='發行日期:']")[0].tail.strip()
-    duration = info.xpath("p/span[text()='長度:']")[0].tail.replace('分鐘', '').strip()
-    director_tag = info.xpath("p/span[text()='導演:']")
-    if director_tag:    # xpath没有匹配时将得到空列表
-        movie.director = director_tag[0].getnext().text.strip()
-    producer_tag = info.xpath("p/span[text()='製作商:']")
-    if producer_tag:
-        text = producer_tag[0].getnext().text
-        if text:
-            movie.producer = text.strip()
-    publisher_tag = info.xpath("p/span[text()='發行商:']")
-    if publisher_tag:
-        movie.publisher = publisher_tag[0].getnext().text.strip()
-    serial_tag = info.xpath("p/span[text()='系列:']")
-    if serial_tag:
-        movie.serial = serial_tag[0].getnext().text
+    info = xpath_first(container, "//div[@class='col-md-3 info']")
+    # 找不到信息栏时用一个空元素代替，使后续的字段都按缺失处理
+    if info is None:
+        info = lxml.html.fromstring('<div></div>')
+    dvdid = _label_next_text(info, '識別碼:') or movie.dvdid
+    publish_date = _label_tail_text(info, '發行日期:')
+    duration = _label_tail_text(info, '長度:')
+    if duration:
+        duration = duration.replace('分鐘', '').strip()
+    director = _label_next_text(info, '導演:')
+    if director:
+        movie.director = director.strip()
+    producer = _label_next_text(info, '製作商:')
+    if producer:
+        movie.producer = producer.strip()
+    publisher = _label_next_text(info, '發行商:')
+    if publisher:
+        movie.publisher = publisher.strip()
+    serial = _label_next_text(info, '系列:')
+    if serial:
+        movie.serial = serial
     # genre, genre_id
     genre_tags = info.xpath("//span[@class='genre']/label/a")
     genre, genre_id = [], []
     for tag in genre_tags:
-        tag_url = tag.get('href')
+        tag_url = tag.get('href') or ''
         pre_id = tag_url.split('/')[-1]
         genre.append(tag.text)
         if 'uncensored' in tag_url:
@@ -77,18 +102,19 @@ def parse_data(movie: MovieInfo):
     for tag in actress_tags:
         name = tag.get('title')
         pic_url = tag.get('src')
+        if not name:
+            continue
         actress.append(name)
-        if not pic_url.endswith('nowprinting.gif'):     # 略过默认的头像
+        if pic_url and not pic_url.endswith('nowprinting.gif'):     # 略过默认的头像
             actress_pics[name] = pic_url
     # 整理数据并更新movie的相应属性
-    movie.url = f'{permanent_url}/{movie.dvdid}'
     movie.dvdid = dvdid
     movie.title = title.replace(dvdid, '').strip()
     movie.cover = cover
     movie.preview_pics = preview_pics
-    if publish_date != '0000-00-00':    # 丢弃无效的发布日期
+    if publish_date and publish_date != '0000-00-00':    # 丢弃无效的发布日期
         movie.publish_date = publish_date
-    movie.duration = duration if int(duration) else None
+    movie.duration = duration if (duration and duration.isdigit() and int(duration)) else None
     movie.genre = genre
     movie.genre_id = genre_id
     movie.actress = actress
