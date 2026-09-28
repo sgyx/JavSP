@@ -1,6 +1,7 @@
 """从avsox抓取数据"""
 import re
 import logging
+import threading
 
 import requests
 
@@ -20,6 +21,8 @@ lang = 'cn'
 _session = requests.Session()
 _session.headers.update(headers)
 _csrf_token = None
+# 并行整理时多个线程可能同时首次调用接口，需要避免重复获取CSRF Token
+_csrf_lock = threading.Lock()
 
 
 def _refresh_csrf_token():
@@ -35,7 +38,9 @@ def _refresh_csrf_token():
 def call_api(method: str, *args):
     """调用avsox的数据接口"""
     if _csrf_token is None:
-        _refresh_csrf_token()
+        with _csrf_lock:
+            if _csrf_token is None:
+                _refresh_csrf_token()
     api_headers = {
         'X-Requested-With': 'XMLHttpRequest',
         'X-CSRF-Token': _csrf_token,

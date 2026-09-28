@@ -209,9 +209,12 @@ class Movie:
                 move_file(fullpath, newpath)
                 new_paths.append(newpath)
         self.new_paths = new_paths
-        if len(os.listdir(dir)) == 0:
-            #如果移动文件后目录为空则删除该目录
-            os.rmdir(dir)
+        #如果移动文件后目录为空则删除该目录（并行整理时同一目录下的其他影片可能已将其删除，或正在向其中移动文件）
+        try:
+            if len(os.listdir(dir)) == 0:
+                os.rmdir(dir)
+        except OSError:
+            pass
 
 
 class GenreMap(dict):

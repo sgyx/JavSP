@@ -3,9 +3,11 @@ import os
 import sys
 import time
 import shutil
+import threading
 import logging
 import requests
 import contextlib
+from urllib.parse import urlsplit
 import cloudscraper
 import lxml.html
 from tqdm import tqdm
@@ -26,6 +28,53 @@ headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 logger = logging.getLogger(__name__)
 # 删除js脚本相关的tag，避免网页检测到没有js运行环境时强行跳转，影响调试
 cleaner = Cleaner(kill_tags=['script', 'noscript'])
+
+# 按站点（主机名）限制同时进行的请求数。并行整理多部影片时，各抓取器、封面和剧照下载都会同时发起请求，
+# 不加限制时对单个站点的请求会成倍增加，容易触发反爬机制。
+# 所有requests的请求（包括cloudscraper）最终都经过Session.request，因此在这里统一加以限制
+_host_semaphores = {}
+_host_semaphores_lock = threading.Lock()
+_held_hosts = threading.local()
+
+
+def _get_host_semaphore(host: str) -> threading.BoundedSemaphore:
+    with _host_semaphores_lock:
+        sem = _host_semaphores.get(host)
+        if sem is None:
+            sem = threading.BoundedSemaphore(Cfg().network.max_requests_per_host)
+            _host_semaphores[host] = sem
+        return sem
+
+
+@contextlib.contextmanager
+def host_slot(url: str):
+    """占用对指定站点发起请求的名额，名额用尽时等待其他请求完成"""
+    host = urlsplit(url).hostname or ''
+    held = getattr(_held_hosts, 'hosts', None)
+    if held is None:
+        held = _held_hosts.hosts = set()
+    # 同一线程内的嵌套请求（如cloudscraper处理验证时发起的请求）不重复占用名额，否则可能死锁
+    if host in held:
+        yield
+        return
+    with _get_host_semaphore(host):
+        held.add(host)
+        try:
+            yield
+        finally:
+            held.discard(host)
+
+
+_original_session_request = requests.Session.request
+
+
+def _limited_session_request(self, method, url, *args, **kwargs):
+    with host_slot(url):
+        return _original_session_request(self, method, url, *args, **kwargs)
+
+
+requests.Session.request = _limited_session_request
+
 
 def read_proxy():
     if Cfg().network.proxy_server is None:

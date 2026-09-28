@@ -4,6 +4,7 @@ import re
 import ssl
 import json
 import time
+import threading
 from typing import Dict, List, Union
 import uuid
 import random
@@ -172,16 +173,18 @@ def _request_timeout():
 
 
 def _throttle(key: str, interval: float):
-    """确保对同一服务的两次请求之间至少间隔interval秒"""
-    now = time.perf_counter()
-    last_access = _last_access.get(key)
-    if last_access is not None:
-        wait = interval - (now - last_access)
-        if wait > 0:
-            time.sleep(wait)
-    _last_access[key] = time.perf_counter()
+    """确保对同一服务的两次请求之间至少间隔interval秒（并行整理时各线程会依次等待）"""
+    with _throttle_lock:
+        now = time.perf_counter()
+        last_access = _last_access.get(key)
+        if last_access is not None:
+            wait = interval - (now - last_access)
+            if wait > 0:
+                time.sleep(wait)
+        _last_access[key] = time.perf_counter()
 
 _last_access: Dict[str, float] = {}
+_throttle_lock = threading.Lock()
 
 
 def baidu_translate(texts, app_id, api_key, to='zh'):
@@ -300,16 +303,19 @@ class LLMTranslateError(Exception):
 
 
 _claude_client = None
+_claude_client_lock = threading.Lock()
 def _get_claude_client(api_key: str) -> anthropic.Anthropic:
     """创建并复用Claude客户端（SDK会自动对429、5xx等错误进行重试）"""
     global _claude_client
-    if _claude_client is None:
+    with _claude_client_lock:
+        if _claude_client is not None:
+            return _claude_client
         kwargs = {}
         # 未配置代理时，SDK会像requests一样读取HTTP(S)_PROXY环境变量
         if Cfg().network.proxy_server is not None:
             kwargs['http_client'] = anthropic.DefaultHttpxClient(proxy=str(Cfg().network.proxy_server))
         _claude_client = anthropic.Anthropic(api_key=api_key, timeout=LLM_TIMEOUT, max_retries=2, **kwargs)
-    return _claude_client
+        return _claude_client
 
 
 def claude_translate(fields: Dict[str, str], content: str, system: str, api_key: str, model: str) -> dict:

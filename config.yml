@@ -36,6 +36,8 @@ network:
   retry: 3
   # https://en.wikipedia.org/wiki/ISO_8601#Durations
   timeout: PT10S
+  # 对同一个站点最多同时发起多少个请求（同时下载剧照、并行整理多部影片时生效），避免请求过于频繁而被封禁
+  max_requests_per_host: 4
 
 ################################
 crawler:
@@ -65,6 +67,9 @@ crawler:
   use_javdb_cover: fallback
   # 是否统一女优艺名。启用时会尝试将女优的多个艺名统一成一个
   normalize_actress_name: true
+  # 同时整理多少部影片（1表示逐部整理）。调大可以加快整理速度，但对各站点的请求也会更频繁，更容易被封禁；
+  # 大于1时只显示总体进度。建议不超过3
+  parallel_movies: 1
 
 ################################
 # 配置整理时的命名规则

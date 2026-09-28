@@ -47,6 +47,7 @@ class Network(BaseConfig):
     retry: NonNegativeInt = 3
     timeout: Duration
     proxy_free: Dict[CrawlerID, Url]
+    max_requests_per_host: PositiveInt = 4
 
 class CrawlerSelect(BaseConfig):
     def items(self) -> List[tuple[str, list[CrawlerID]]]:
@@ -118,6 +119,7 @@ class Crawler(BaseConfig):
     sleep_after_scraping: Duration
     use_javdb_cover: UseJavDBCover
     normalize_actress_name: bool
+    parallel_movies: PositiveInt = 1
 
 class MovieDefault(BaseConfig):
     title: str

@@ -1,5 +1,6 @@
 """从JavLibrary抓取数据"""
 import logging
+import threading
 from urllib.parse import urlsplit
 
 
@@ -16,6 +17,7 @@ request = Request(use_scraper=True)
 logger = logging.getLogger(__name__)
 permanent_url = 'https://www.javlibrary.com'
 base_url = ''
+_init_lock = threading.Lock()
 
 
 def init_network_cfg():
@@ -49,8 +51,11 @@ def parse_data(movie: MovieInfo):
     """解析指定番号的影片数据"""
     global base_url
     if not base_url:
-        base_url = init_network_cfg()
-        logger.debug(f"JavLib网络配置: {base_url}, proxy={request.proxies}")
+        # 并行整理时避免多个线程同时进行网络配置
+        with _init_lock:
+            if not base_url:
+                base_url = init_network_cfg()
+                logger.debug(f"JavLib网络配置: {base_url}, proxy={request.proxies}")
     url = new_url = f'{base_url}/cn/vl_searchbyid.php?keyword={movie.dvdid}'
     resp = request.get(url)
     html = resp2html(resp)

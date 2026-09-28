@@ -2,6 +2,7 @@
 import os
 import re
 import logging
+import threading
 
 from javsp.web.base import Request, resp2html, xpath_first
 from javsp.web.exceptions import *
@@ -30,31 +31,17 @@ else:
 def get_html_wrapper(url):
     """包装外发的request请求并负责转换为可xpath的html，同时处理Cookies无效等问题"""
     global request, cookies_pool
-    r = request.get(url, delay_raise=True)
+    used_request = request
+    r = used_request.get(url, delay_raise=True)
     if r.status_code == 200:
         # 发生重定向可能仅仅是域名重定向，因此还要检查url以判断是否被跳转到了登录页
         if r.history and '/login' in r.url:
-            # 仅在需要时去读取Cookies
-            if 'cookies_pool' not in globals():
-                try:
-                    cookies_pool = get_browsers_cookies()
-                except (PermissionError, OSError) as e:
-                    logger.warning(f"无法从浏览器Cookies文件获取JavDB的登录凭据({e})，可能是安全软件在保护浏览器Cookies文件", exc_info=True)
-                    cookies_pool = []
-                except Exception as e:
-                    logger.warning(f"获取JavDB的登录凭据时出错({e})，你可能使用的是国内定制版等非官方Chrome系浏览器", exc_info=True)
-                    cookies_pool = []
-            if len(cookies_pool) > 0:
-                item = cookies_pool.pop()
-                # 更换Cookies时创建新的request实例，避免沿用之前的请求设置
-                request = Request()
-                request.headers['Accept-Language'] = accept_language
-                request.cookies = item['cookies']
-                cookies_source = (item['profile'], item['site'])
-                logger.debug(f'未携带有效Cookies而发生重定向，尝试更换Cookies为: {cookies_source}')
-                return get_html_wrapper(url)
-            else:
-                raise CredentialError('JavDB: 所有浏览器Cookies均已过期')
+            with _cookies_lock:
+                # 并行整理时其他线程可能已经更换了Cookies，此时直接使用新的Cookies重试
+                if request is used_request:
+                    _switch_cookies()
+            # 在释放锁之后再重试，避免重试时再次遇到登录页而发生死锁
+            return get_html_wrapper(url)
         elif r.history and 'pay' in r.url.split('/')[-1]:
             raise SitePermissionError(f"JavDB: 此资源被限制为仅VIP可见: '{r.history[0].url}'")
         else:
@@ -75,6 +62,34 @@ def get_html_wrapper(url):
     else:
         raise WebsiteError(f'JavDB: {r.status_code} 非预期状态码: {url}')
 
+
+_cookies_lock = threading.Lock()
+
+
+def _switch_cookies():
+    """读取浏览器中JavDB的Cookies并更换为下一个可用的Cookies（调用时需持有_cookies_lock）"""
+    global request, cookies_pool
+    # 仅在需要时去读取Cookies
+    if 'cookies_pool' not in globals():
+        try:
+            cookies_pool = get_browsers_cookies()
+        except (PermissionError, OSError) as e:
+            logger.warning(f"无法从浏览器Cookies文件获取JavDB的登录凭据({e})，可能是安全软件在保护浏览器Cookies文件", exc_info=True)
+            cookies_pool = []
+        except Exception as e:
+            logger.warning(f"获取JavDB的登录凭据时出错({e})，你可能使用的是国内定制版等非官方Chrome系浏览器", exc_info=True)
+            cookies_pool = []
+    if len(cookies_pool) > 0:
+        item = cookies_pool.pop()
+        # 更换Cookies时创建新的request实例，避免沿用之前的请求设置
+        new_request = Request()
+        new_request.headers['Accept-Language'] = accept_language
+        new_request.cookies = item['cookies']
+        request = new_request
+        cookies_source = (item['profile'], item['site'])
+        logger.debug(f'未携带有效Cookies而发生重定向，尝试更换Cookies为: {cookies_source}')
+    else:
+        raise CredentialError('JavDB: 所有浏览器Cookies均已过期')
 
 def get_user_info(site, cookies):
     """获取cookies对应的JavDB用户信息"""

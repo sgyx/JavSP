@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from pydantic_extra_types.pendulum_dt import Duration
 import requests
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -433,8 +433,18 @@ def process_poster(movie: Movie):
             fanart_cropped = add_label_to_poster(fanart_cropped, UNCENSORED_MARK_FILE, LabelPostion.BOTTOM_LEFT)
     fanart_cropped.save(movie.poster_file)
 
-def RunNormalMode(all_movies):
-    """普通整理模式"""
+def get_total_step():
+    """整理一部影片需要执行的步骤数，用于显示进度"""
+    total_step = 6
+    if Cfg().translator.engine:
+        total_step += 1
+    if Cfg().summarizer.extra_fanarts.enabled:
+        total_step += 1
+    return total_step
+
+
+def process_movie(movie: Movie, inner_bar: tqdm, show_download_progress=True):
+    """整理一部影片。任一步骤失败时抛出异常"""
     def check_step(result, msg='步骤错误'):
         """检查一个整理步骤的结果，并负责更新tqdm的进度"""
         if result:
@@ -442,80 +452,81 @@ def RunNormalMode(all_movies):
         else:
             raise Exception(msg + '\n')
 
-    outer_bar = tqdm(all_movies, desc='整理影片', ascii=True, leave=False)
-    total_step = 6
-    if Cfg().translator.engine:
-        total_step += 1
-    if Cfg().summarizer.extra_fanarts.enabled:
-        total_step += 1
+    filenames = [os.path.split(i)[1] for i in movie.files]
+    logger.info('正在整理: ' + ', '.join(filenames))
+    # 依次执行各个步骤
+    inner_bar.set_description(f'启动并发任务')
+    all_info = parallel_crawler(movie, inner_bar)
+    msg = f'为其配置的{len(Cfg().crawler.selection[movie.data_src])}个抓取器均未获取到影片信息'
+    check_step(all_info, msg)
 
+    inner_bar.set_description('汇总数据')
+    has_required_keys = info_summary(movie, all_info)
+    check_step(has_required_keys)
+
+    if Cfg().translator.engine:
+        inner_bar.set_description('翻译影片信息')
+        success = translate_movie_info(movie.info)
+        check_step(success)
+
+    generate_names(movie)
+    check_step(movie.save_dir, '无法按命名规则生成目标文件夹')
+    # 并行整理时多部影片可能同时创建同一个上级文件夹（如同一女优的文件夹）
+    os.makedirs(movie.save_dir, exist_ok=True)
+
+    inner_bar.set_description('下载封面图片')
+    if Cfg().summarizer.cover.highres:
+        cover_dl = download_cover(movie.info.covers, movie.fanart_file, movie.info.big_covers, show_download_progress)
+    else:
+        cover_dl = download_cover(movie.info.covers, movie.fanart_file, show_progress=show_download_progress)
+    check_step(cover_dl, '下载封面图片失败')
+    cover, pic_path = cover_dl
+    # 确保实际下载的封面的url与即将写入到movie.info中的一致
+    if cover != movie.info.cover:
+        movie.info.cover = cover
+    # 根据实际下载的封面的格式更新fanart/poster等图片的文件名
+    if pic_path != movie.fanart_file:
+        movie.fanart_file = pic_path
+        actual_ext = os.path.splitext(pic_path)[1]
+        movie.poster_file = os.path.splitext(movie.poster_file)[0] + actual_ext
+
+    process_poster(movie)
+
+    check_step(True)
+
+    if Cfg().summarizer.extra_fanarts.enabled:
+        inner_bar.set_description('下载剧照')
+        if movie.info.preview_pics:
+            extrafanartdir = movie.save_dir + '/extrafanart'
+            # 重新整理同一部影片时文件夹可能已经存在
+            os.makedirs(extrafanartdir, exist_ok=True)
+            download_extrafanarts(movie.info.preview_pics, extrafanartdir, inner_bar)
+        check_step(True)
+
+    inner_bar.set_description('写入NFO')
+    write_nfo(movie.info, movie.nfo_file)
+    check_step(True)
+    if Cfg().summarizer.move_files:
+        inner_bar.set_description('移动影片文件')
+        movie.rename_files(Cfg().summarizer.path.hard_link)
+        check_step(True)
+        logger.info(f'整理完成，相关文件已保存到: {movie.save_dir}\n')
+    else:
+        logger.info(f'刮削完成，相关文件已保存到: {movie.nfo_file}\n')
+
+
+def RunNormalMode(all_movies):
+    """普通整理模式"""
+    workers = min(Cfg().crawler.parallel_movies, len(all_movies))
+    if workers > 1:
+        return run_parallel(all_movies, workers)
+
+    outer_bar = tqdm(all_movies, desc='整理影片', ascii=True, leave=False)
     return_movies = []
     for movie in outer_bar:
+        inner_bar = tqdm(total=get_total_step(), desc='步骤', ascii=True, leave=False)
         try:
-            # 初始化本次循环要整理影片任务
-            filenames = [os.path.split(i)[1] for i in movie.files]
-            logger.info('正在整理: ' + ', '.join(filenames))
-            inner_bar = tqdm(total=total_step, desc='步骤', ascii=True, leave=False)
-            # 依次执行各个步骤
-            inner_bar.set_description(f'启动并发任务')
-            all_info = parallel_crawler(movie, inner_bar)
-            msg = f'为其配置的{len(Cfg().crawler.selection[movie.data_src])}个抓取器均未获取到影片信息'
-            check_step(all_info, msg)
-
-            inner_bar.set_description('汇总数据')
-            has_required_keys = info_summary(movie, all_info)
-            check_step(has_required_keys)
-
-            if Cfg().translator.engine:
-                inner_bar.set_description('翻译影片信息')
-                success = translate_movie_info(movie.info)
-                check_step(success)
-
-            generate_names(movie)
-            check_step(movie.save_dir, '无法按命名规则生成目标文件夹')
-            if not os.path.exists(movie.save_dir):
-                os.makedirs(movie.save_dir)
-
-            inner_bar.set_description('下载封面图片')
-            if Cfg().summarizer.cover.highres:
-                cover_dl = download_cover(movie.info.covers, movie.fanart_file, movie.info.big_covers)
-            else:
-                cover_dl = download_cover(movie.info.covers, movie.fanart_file)
-            check_step(cover_dl, '下载封面图片失败')
-            cover, pic_path = cover_dl
-            # 确保实际下载的封面的url与即将写入到movie.info中的一致
-            if cover != movie.info.cover:
-                movie.info.cover = cover
-            # 根据实际下载的封面的格式更新fanart/poster等图片的文件名
-            if pic_path != movie.fanart_file:
-                movie.fanart_file = pic_path
-                actual_ext = os.path.splitext(pic_path)[1]
-                movie.poster_file = os.path.splitext(movie.poster_file)[0] + actual_ext
-
-            process_poster(movie)
-
-            check_step(True)
-
-            if Cfg().summarizer.extra_fanarts.enabled:
-                inner_bar.set_description('下载剧照')
-                if movie.info.preview_pics:
-                    extrafanartdir = movie.save_dir + '/extrafanart'
-                    # 重新整理同一部影片时文件夹可能已经存在
-                    os.makedirs(extrafanartdir, exist_ok=True)
-                    download_extrafanarts(movie.info.preview_pics, extrafanartdir, inner_bar)
-                check_step(True)
-
-            inner_bar.set_description('写入NFO')
-            write_nfo(movie.info, movie.nfo_file)
-            check_step(True)
-            if Cfg().summarizer.move_files:
-                inner_bar.set_description('移动影片文件')
-                movie.rename_files(Cfg().summarizer.path.hard_link)
-                check_step(True)
-                logger.info(f'整理完成，相关文件已保存到: {movie.save_dir}\n')
-            else:
-                logger.info(f'刮削完成，相关文件已保存到: {movie.nfo_file}\n')
-
+            process_movie(movie, inner_bar)
             if movie != all_movies[-1] and Cfg().crawler.sleep_after_scraping > Duration(0):
                 time.sleep(Cfg().crawler.sleep_after_scraping.total_seconds())
             return_movies.append(movie)
@@ -525,6 +536,45 @@ def RunNormalMode(all_movies):
             logger.error(f'整理失败: {e}')
         finally:
             inner_bar.close()
+    return return_movies
+
+
+def run_parallel(all_movies, workers):
+    """同时整理多部影片。只显示总体进度，各影片的步骤进度和下载进度不再单独显示"""
+    logger.info(f'将同时整理{workers}部影片')
+    outer_bar = tqdm(total=len(all_movies), desc='整理影片', ascii=True, leave=False)
+
+    def worker(movie):
+        # 使用禁用的进度条，使process_movie中更新进度的代码无需区分是否在并行整理
+        inner_bar = tqdm(total=get_total_step(), disable=True)
+        try:
+            process_movie(movie, inner_bar, show_download_progress=False)
+            # 每个线程整理完一部影片后等待一段时间，与逐部整理时的行为保持一致
+            if Cfg().crawler.sleep_after_scraping > Duration(0):
+                time.sleep(Cfg().crawler.sleep_after_scraping.total_seconds())
+            return movie
+        except Exception as e:
+            logger.debug(e, exc_info=True)
+            logger.error(f"整理失败: {', '.join(os.path.basename(i) for i in movie.files)}: {e}")
+        finally:
+            inner_bar.close()
+
+    return_movies = []
+    executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix='movie')
+    try:
+        futures = [executor.submit(worker, movie) for movie in all_movies]
+        for future in as_completed(futures):
+            movie = future.result()
+            if movie is not None:
+                return_movies.append(movie)
+            outer_bar.update()
+    except KeyboardInterrupt:
+        # 取消尚未开始的任务，正在整理的影片会继续完成当前步骤
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    finally:
+        executor.shutdown(wait=True)
+        outer_bar.close()
     return return_movies
 
 
@@ -563,14 +613,14 @@ def download_extrafanarts(pic_urls, extrafanartdir, tqdm_bar=None):
         list(executor.map(download_one, range(len(pic_urls)), pic_urls))
 
 
-def download_cover(covers, fanart_path, big_covers=[]):
+def download_cover(covers, fanart_path, big_covers=[], show_progress=True):
     """下载封面图片"""
     # 优先下载高清封面
     for url in big_covers:
         pic_path = get_pic_path(fanart_path, url)
         for _ in range(Cfg().network.retry):
             try:
-                info = download(url, pic_path)
+                info = download(url, pic_path, show_progress=show_progress)
                 if valid_pic(pic_path):
                     filesize = get_fmt_size(pic_path)
                     width, height = get_pic_size(pic_path)
@@ -586,7 +636,7 @@ def download_cover(covers, fanart_path, big_covers=[]):
         pic_path = get_pic_path(fanart_path, url)
         for _ in range(Cfg().network.retry):
             try:
-                download(url, pic_path)
+                download(url, pic_path, show_progress=show_progress)
                 if valid_pic(pic_path):
                     logger.debug(f"已下载封面: '{url}'")
                     return (url, pic_path)
