@@ -147,6 +147,7 @@ class NFOSummarize(BaseConfig):
 class ExtraFanartSummarize(BaseConfig):
     enabled: bool
     scrap_interval: Duration
+    max_workers: PositiveInt = 4
 
 class SlimefaceEngine(BaseConfig):
     name: Literal['slimeface']

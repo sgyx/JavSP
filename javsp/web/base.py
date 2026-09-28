@@ -219,8 +219,8 @@ def urlretrieve(url, filename=None, reporthook=None, headers=None):
         headers["Referer"] = "https://www.arzon.jp/"
     """使用requests实现urlretrieve"""
     # https://blog.csdn.net/qq_38282706/article/details/80253447
-    with contextlib.closing(requests.get(url, headers=headers,
-                                         proxies=read_proxy(), stream=True)) as r:
+    with contextlib.closing(requests.get(url, headers=headers, proxies=read_proxy(), stream=True,
+                                         timeout=Cfg().network.timeout.total_seconds())) as r:
         header = r.headers
         with open(filename, 'wb+') as fp:
             bs = 1024
@@ -239,8 +239,8 @@ def urlretrieve(url, filename=None, reporthook=None, headers=None):
                         reporthook(blocknum, bs, size)  # 每写入一次运行一次回调函数
 
 
-def download(url, output_path, desc=None):
-    """下载指定url的资源"""
+def download(url, output_path, desc=None, show_progress=True):
+    """下载指定url的资源（多个下载同时进行时应关闭进度条，否则进度条的显示会错乱）"""
     # 支持“下载”本地资源，以供fc2fan的本地镜像所使用
     if not url.startswith('http'):
         start_time = time.time()
@@ -253,11 +253,17 @@ def download(url, output_path, desc=None):
         desc = url.split('/')[-1]
     referrer = headers.copy()
     referrer['referer'] = url[:url.find('/', 8)+1]  # 提取base_url部分
-    with DownloadProgressBar(unit='B', unit_scale=True,
-                             miniters=1, desc=desc, leave=False) as t:
+    start_time = time.time()
+    with DownloadProgressBar(unit='B', unit_scale=True, miniters=1, desc=desc, leave=False,
+                             disable=not show_progress) as t:
         urlretrieve(url, filename=output_path, reporthook=t.update_to, headers=referrer)
         info = {k: t.format_dict[k] for k in ('total', 'elapsed', 'rate')}
-        return info
+    # 关闭进度条时tqdm不会统计耗时和速度，需要自行计算
+    if not show_progress:
+        filesize = os.path.getsize(output_path)
+        elapsed = time.time() - start_time
+        info = {'total': filesize, 'elapsed': elapsed, 'rate': filesize/elapsed if elapsed > 0 else 0}
+    return info
 
 
 def open_in_chrome(url, new=0, autoraise=True):

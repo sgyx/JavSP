@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from pydantic_extra_types.pendulum_dt import Duration
 import requests
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -496,30 +497,12 @@ def RunNormalMode(all_movies):
             check_step(True)
 
             if Cfg().summarizer.extra_fanarts.enabled:
-                scrape_interval = Cfg().summarizer.extra_fanarts.scrap_interval.total_seconds()
                 inner_bar.set_description('下载剧照')
                 if movie.info.preview_pics:
                     extrafanartdir = movie.save_dir + '/extrafanart'
                     # 重新整理同一部影片时文件夹可能已经存在
                     os.makedirs(extrafanartdir, exist_ok=True)
-                    for (id, pic_url) in enumerate(movie.info.preview_pics):
-                        inner_bar.set_description(f"Downloading extrafanart {id} from url: {pic_url}")
-
-                        fanart_destination = f"{extrafanartdir}/{id}.png"
-                        # 单张剧照下载失败不影响影片的整理，记录警告后继续下载下一张
-                        try:
-                            info = download(pic_url, fanart_destination)
-                            if valid_pic(fanart_destination):
-                                filesize = get_fmt_size(fanart_destination)
-                                width, height = get_pic_size(fanart_destination)
-                                elapsed = time.strftime("%M:%S", time.gmtime(info['elapsed']))
-                                speed = get_fmt_size(info['rate']) + '/s'
-                                logger.info(f"已下载剧照{pic_url} {id}.png: {width}x{height}, {filesize} [{elapsed}, {speed}]")
-                            else:
-                                logger.warning(f"下载剧照{id}失败，图片无效或已损坏: {pic_url}")
-                        except Exception as e:
-                            logger.warning(f"下载剧照{id}失败: {pic_url}: {e!r}")
-                        time.sleep(scrape_interval)
+                    download_extrafanarts(movie.info.preview_pics, extrafanartdir, inner_bar)
                 check_step(True)
 
             inner_bar.set_description('写入NFO')
@@ -543,6 +526,41 @@ def RunNormalMode(all_movies):
         finally:
             inner_bar.close()
     return return_movies
+
+
+def download_extrafanarts(pic_urls, extrafanartdir, tqdm_bar=None):
+    """并行下载剧照。单张剧照下载失败不影响影片的整理，记录警告后继续下载其他剧照"""
+    cfg = Cfg().summarizer.extra_fanarts
+    interval = cfg.scrap_interval.total_seconds()
+    finished = 0
+    lock = threading.Lock()
+
+    def download_one(id, pic_url):
+        nonlocal finished
+        fanart_destination = f"{extrafanartdir}/{id}.png"
+        try:
+            # 多张剧照同时下载时不显示各自的进度条，否则显示会错乱
+            info = download(pic_url, fanart_destination, show_progress=False)
+            if valid_pic(fanart_destination):
+                filesize = get_fmt_size(fanart_destination)
+                width, height = get_pic_size(fanart_destination)
+                elapsed = time.strftime("%M:%S", time.gmtime(info['elapsed']))
+                speed = get_fmt_size(info['rate']) + '/s'
+                logger.info(f"已下载剧照{pic_url} {id}.png: {width}x{height}, {filesize} [{elapsed}, {speed}]")
+            else:
+                logger.warning(f"下载剧照{id}失败，图片无效或已损坏: {pic_url}")
+        except Exception as e:
+            logger.warning(f"下载剧照{id}失败: {pic_url}: {e!r}")
+        with lock:
+            finished += 1
+            if isinstance(tqdm_bar, tqdm):
+                tqdm_bar.set_description(f'下载剧照 ({finished}/{len(pic_urls)})')
+        # 每个下载线程在两次下载之间等待一段时间，以免请求过于频繁
+        time.sleep(interval)
+
+    with ThreadPoolExecutor(max_workers=cfg.max_workers, thread_name_prefix='extrafanart') as executor:
+        # 通过list()等待所有任务完成（download_one内部已处理异常）
+        list(executor.map(download_one, range(len(pic_urls)), pic_urls))
 
 
 def download_cover(covers, fanart_path, big_covers=[]):
