@@ -63,7 +63,7 @@ def compare(avid, scraper, file):
             # 部分字段可能随时间变化，因此只要这些字段不是一方有值一方无值就行
             if k in ['score', 'magnet']:
                 assert bool(v) == bool(local_vars.get(k, None))
-            elif k == 'preview_video' and scraper in ['airav', 'javdb']:
+            elif k == 'preview_video' and scraper in ['airav', 'javdb', 'fanza']:
                 assert bool(v) == bool(local_vars.get(k, None))
             # JavBus采用免代理域名时图片地址也会是免代理域名，因此只比较path部分即可
             elif k == 'cover' and scraper == 'javbus':
