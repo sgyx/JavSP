@@ -8,6 +8,7 @@ on:
   push:
     branches:
     - master
+    - build/windows
   pull_request:
     branches:
     - master
