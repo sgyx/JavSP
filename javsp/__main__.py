@@ -48,6 +48,7 @@ from javsp.datatype import Movie, MovieInfo
 from javsp.web.base import download
 from javsp.web.exceptions import *
 from javsp.web.translate import translate_movie_info
+from javsp.subtitle import download_subtitle
 
 from javsp.config import Cfg, CrawlerID, UseJavDBCover
 from javsp.prompt import prompt
@@ -443,6 +444,8 @@ def get_total_step():
         total_step += 1
     if Cfg().summarizer.extra_fanarts.enabled:
         total_step += 1
+    if Cfg().summarizer.subtitle.enabled:
+        total_step += 1
     return total_step
 
 
@@ -513,6 +516,18 @@ def process_movie(movie: Movie, inner_bar: tqdm, show_download_progress=True):
         inner_bar.set_description('移动影片文件')
         movie.rename_files(Cfg().summarizer.path.hard_link)
         check_step(True)
+
+    # 放在移动文件之后：需要知道影片的最终位置，并检查随影片移动过来的本地字幕
+    if Cfg().summarizer.subtitle.enabled:
+        inner_bar.set_description('下载字幕')
+        try:
+            download_subtitle(movie)
+        except Exception as e:
+            # 字幕只是附加内容，下载失败不应导致整部影片整理失败
+            logger.warning(f'下载字幕失败: {e!r}')
+        check_step(True)
+
+    if Cfg().summarizer.move_files:
         logger.info(f'整理完成，相关文件已保存到: {movie.save_dir}\n')
     else:
         logger.info(f'刮削完成，相关文件已保存到: {movie.nfo_file}\n')

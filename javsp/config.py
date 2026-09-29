@@ -169,6 +169,17 @@ class CoverSummarize(BaseConfig):
 class FanartSummarize(BaseConfig):
     basename_pattern: str
 
+class SubtitleProviderID(str, Enum):
+    subtitlecat = 'subtitlecat'
+
+class SubtitleSummarize(BaseConfig):
+    enabled: bool = False
+    providers: list[SubtitleProviderID] = [SubtitleProviderID.subtitlecat]
+    languages: list[str] = ['zh-CN', 'zh-TW']
+    skip_hard_sub: bool = True
+    skip_if_exists: bool = True
+    filename_suffix: str = '.{lang}'
+
 class Summarizer(BaseConfig):
     default: MovieDefault
     censor_options_representation: list[str]
@@ -179,6 +190,8 @@ class Summarizer(BaseConfig):
     cover: CoverSummarize
     fanart: FanartSummarize
     extra_fanarts: ExtraFanartSummarize
+    # 旧版配置文件中没有此项，使用默认值（关闭）
+    subtitle: SubtitleSummarize = Field(default_factory=SubtitleSummarize)
 
 class BaiduTranslateEngine(BaseConfig):
     name: Literal['baidu']

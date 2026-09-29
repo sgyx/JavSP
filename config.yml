@@ -157,6 +157,23 @@ summarizer:
     # 每个下载线程在两次剧照下载之间应该间隔多久
     scrap_interval: PT1.5S
 
+  subtitle:
+    # 是否从字幕网站下载外挂字幕？字幕会保存在影片所在文件夹，并与影片同名以便播放器自动加载
+    # NOTE: 网站上的字幕多为机器翻译，且不一定与你的影片版本时间轴一致
+    enabled: false
+    # 要使用的字幕网站，按顺序尝试。目前支持: subtitlecat
+    providers: [subtitlecat]
+    # 要下载的字幕语言，按优先级排列（zh-CN: 简体中文, zh-TW: 繁体中文）
+    languages: [zh-CN, zh-TW]
+    # 影片带有内嵌字幕时不下载。判断依据：文件名的-C后缀、文件名或所在文件夹名中的“中文字幕”等关键词，
+    # 以及影片内的中文字幕轨道（需要安装ffprobe）。画面中硬编码但文件名没有标注的字幕无法识别
+    skip_hard_sub: true
+    # 影片所在文件夹中已有同名字幕时不下载（本地的同名字幕会随影片一起移动）
+    skip_if_exists: true
+    # 字幕文件名在影片文件名之后追加的部分，{lang}会被替换为语言代码，如'影片名.zh-CN.srt'
+    # 设置为''时字幕与影片完全同名，如'影片名.srt'
+    filename_suffix: '.{lang}'
+
 ################################
 translator:
   # 翻译引擎，可选: google, bing, baidu, claude, openai （Google可以直接免费使用。留空表示禁用翻译功能）

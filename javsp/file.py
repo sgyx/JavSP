@@ -14,7 +14,7 @@ __all__ = ['scan_movies', 'get_fmt_size', 'get_remaining_path_len', 'replace_ill
 
 
 from javsp.avid import *
-from javsp.lib import re_escape
+from javsp.lib import re_escape, SUB_EXTENSIONS
 from javsp.config import Cfg
 from javsp.datatype import Movie
 
@@ -238,7 +238,6 @@ def get_fmt_size(file_or_size) -> str:
 
 
 _sub_files = {}
-SUB_EXTENSIONS = ('.srt', '.ass')
 def find_subtitle_in_dir(folder: str, dvdid: str):
     """在folder内寻找是否有匹配dvdid的字幕"""
     folder_data = _sub_files.get(folder)
@@ -248,7 +247,7 @@ def find_subtitle_in_dir(folder: str, dvdid: str):
         for dirpath, dirnames, filenames in os.walk(folder):
             for file in filenames:
                 basename, ext = os.path.splitext(file)
-                if ext in SUB_EXTENSIONS:
+                if ext.lower() in SUB_EXTENSIONS:
                     match_id = get_id(basename)
                     if match_id:
                         folder_data[match_id.upper()] = os.path.join(dirpath, file)

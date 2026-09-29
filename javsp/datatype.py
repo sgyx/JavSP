@@ -7,7 +7,7 @@ import logging
 from functools import cached_property
 
 from javsp.config import Cfg
-from javsp.lib import resource_path, detect_special_attr
+from javsp.lib import resource_path, detect_special_attr, list_sidecar_subtitles
 
 
 logger = logging.getLogger(__name__)
@@ -194,20 +194,25 @@ class Movie:
             # 目前StreamHandler并未设置filter，为了避免显示中出现重复的日志，这里暂时只能用debug级别
             filemove_logger.debug(f'移动（重命名）文件: \n  原路径: "{src}"\n  新路径: "{abs_dst}"')
 
+        def move_with_subtitles(src: str, new_stem: str) -> str:
+            """移动影片文件，同时将与其同名的外挂字幕一起移动并重命名"""
+            src_stem, ext = os.path.splitext(src)
+            newpath = os.path.join(self.save_dir, new_stem + ext)
+            move_file(src, newpath)
+            for sub_path, sub_suffix in list_sidecar_subtitles(os.path.dirname(src), os.path.basename(src_stem)):
+                try:
+                    move_file(sub_path, os.path.join(self.save_dir, new_stem + sub_suffix))
+                except FileExistsError as e:
+                    logger.warning(f'未移动字幕文件: {e}')
+            return newpath
+
         new_paths = []
         dir = os.path.dirname(self.files[0])
         if len(self.files) == 1:
-            fullpath = self.files[0]
-            ext = os.path.splitext(fullpath)[1]
-            newpath = os.path.join(self.save_dir, self.basename + ext)
-            move_file(fullpath, newpath)
-            new_paths.append(newpath)
+            new_paths.append(move_with_subtitles(self.files[0], self.basename))
         else:
             for i, fullpath in enumerate(self.files, start=1):
-                ext = os.path.splitext(fullpath)[1]
-                newpath = os.path.join(self.save_dir, self.basename + f'-CD{i}' + ext)
-                move_file(fullpath, newpath)
-                new_paths.append(newpath)
+                new_paths.append(move_with_subtitles(fullpath, self.basename + f'-CD{i}'))
         self.new_paths = new_paths
         #如果移动文件后目录为空则删除该目录（并行整理时同一目录下的其他影片可能已将其删除，或正在向其中移动文件）
         try:

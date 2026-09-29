@@ -5,7 +5,10 @@ import sys
 from pathlib import Path
 
 
-__all__ = ['re_escape', 'resource_path', 'user_path', 'strftime_to_minutes', 'detect_special_attr']
+__all__ = ['re_escape', 'resource_path', 'user_path', 'strftime_to_minutes', 'detect_special_attr', 'SUB_EXTENSIONS', 'list_sidecar_subtitles']
+
+
+SUB_EXTENSIONS = ('.srt', '.ass', '.ssa', '.vtt')
 
 
 _special_chars_map = {i: '\\' + chr(i) for i in b'()[]{}?*+|^$\\.'}
@@ -77,6 +80,29 @@ def detect_special_attr(filepath: str, avid: str = None) -> str:
     # 最终格式化
     result = ''.join(sorted(set(result), reverse=True))
     return result
+
+
+def list_sidecar_subtitles(folder: str, stem: str) -> list[tuple[str, str]]:
+    """列出folder中与名为stem的影片配套的外挂字幕（如'stem.srt', 'stem.zh-CN.ass'）
+
+    Returns:
+        [list]: (字幕文件路径, stem之后的部分)，例如('/a/stem.zh-CN.srt', '.zh-CN.srt')
+    """
+    results = []
+    try:
+        filenames = os.listdir(folder)
+    except OSError:
+        return results
+    stem_lower = stem.lower()
+    for name in filenames:
+        base, ext = os.path.splitext(name)
+        if ext.lower() not in SUB_EXTENSIONS or not base.lower().startswith(stem_lower):
+            continue
+        rest = base[len(stem):]
+        # 只接受完全同名或以'.'分隔语言标签的字幕，避免'ABC-123.mp4'匹配到'ABC-123-C.srt'
+        if rest == '' or rest.startswith('.'):
+            results.append((os.path.join(folder, name), rest + ext))
+    return results
 
 
 if __name__ == "__main__":
