@@ -557,6 +557,36 @@ def RunNormalMode(all_movies):
     return return_movies
 
 
+def RunSubtitleOnlyMode(all_movies):
+    """仅补充字幕模式：为已整理过的影片下载字幕，不抓取信息，也不移动/重命名文件"""
+    workers = min(Cfg().crawler.parallel_movies, len(all_movies))
+    outer_bar = tqdm(total=len(all_movies), desc='下载字幕', ascii=True, leave=False)
+
+    def worker(movie):
+        try:
+            return download_subtitle(movie)
+        except Exception as e:
+            logger.debug(e, exc_info=True)
+            logger.warning(f"下载字幕失败: {', '.join(os.path.basename(i) for i in movie.files)}: {e!r}")
+            return False
+
+    downloaded = 0
+    executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix='subtitle')
+    try:
+        futures = [executor.submit(worker, movie) for movie in all_movies]
+        for future in as_completed(futures):
+            downloaded += bool(future.result())
+            outer_bar.update()
+    except KeyboardInterrupt:
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    finally:
+        executor.shutdown(wait=True)
+        outer_bar.close()
+    logger.info(f'补充字幕完成：共{len(all_movies)}部影片，为其中{downloaded}部下载了字幕')
+    return downloaded
+
+
 def run_parallel(all_movies, workers):
     """同时整理多部影片。只显示总体进度，各影片的步骤进度和下载进度不再单独显示"""
     logger.info(f'将同时整理{workers}部影片')
@@ -709,6 +739,9 @@ def entry():
     import_crawlers()
     os.chdir(root)
 
+    subtitle_only = Cfg().summarizer.subtitle.subtitle_only
+    if subtitle_only:
+        logger.info('仅补充字幕模式：只下载字幕，不抓取信息，也不移动影片文件')
     print(f'扫描影片文件...')
     recognized = scan_movies(root)
     movie_count = len(recognized)
@@ -717,7 +750,10 @@ def entry():
     logger.info(f'扫描影片文件：共找到 {movie_count} 部影片')
     if Cfg().scanner.manual:
         reviewMovieID(recognized, root)
-    RunNormalMode(recognized + recognize_fail)
+    if subtitle_only:
+        RunSubtitleOnlyMode(recognized)
+    else:
+        RunNormalMode(recognized + recognize_fail)
 
     sys.exit(0)
 

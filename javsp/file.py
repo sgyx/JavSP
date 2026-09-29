@@ -37,8 +37,9 @@ def scan_movies(root: str) -> List[Movie]:
         for name in dirnames.copy():
             if ignore_folder_name_pattern.match(name):
                 dirnames.remove(name)
-            # 移除有nfo的文件夹
-            if Cfg().scanner.skip_nfo_dir:
+                continue
+            # 移除有nfo的文件夹（仅补充字幕时需要扫描的正是这些已整理过的文件夹）
+            if Cfg().scanner.skip_nfo_dir and not Cfg().summarizer.subtitle.subtitle_only:
                 if any(file.lower().endswith(".nfo") for file in os.listdir(os.path.join(dirpath, name)) if isinstance(file, str)):
                     print(f"skip file {name}")
                     dirnames.remove(name)

@@ -179,6 +179,7 @@ class SubtitleSummarize(BaseConfig):
     skip_hard_sub: bool = True
     skip_if_exists: bool = True
     filename_suffix: str = '.{lang}'
+    subtitle_only: bool = False
 
 class Summarizer(BaseConfig):
     default: MovieDefault

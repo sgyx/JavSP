@@ -92,7 +92,7 @@ def download_subtitle(movie: Movie) -> bool:
         logger.debug(f'{movie}没有番号，无法搜索字幕')
         return False
     if len(movie.files) != 1:
-        logger.info('暂不支持为多分片的影片下载字幕')
+        logger.info(f'{movie.dvdid}: 暂不支持为多分片的影片下载字幕')
         return False
     # 整理影片文件后，影片已被移动到新的位置
     video_path = (getattr(movie, 'new_paths', None) or movie.files)[0]
@@ -100,12 +100,12 @@ def download_subtitle(movie: Movie) -> bool:
     if cfg.skip_hard_sub:
         reason = detect_hard_sub(movie, video_path)
         if reason:
-            logger.info(f'{reason}，不下载字幕')
+            logger.info(f'{movie.dvdid}: {reason}，不下载字幕')
             return False
     if cfg.skip_if_exists:
         existing = list_sidecar_subtitles(folder, stem)
         if existing:
-            logger.info(f"已有字幕文件，不再下载: '{os.path.basename(existing[0][0])}'")
+            logger.info(f"{movie.dvdid}: 已有字幕文件，不再下载: '{os.path.basename(existing[0][0])}'")
             return False
     for provider in cfg.providers:
         try:

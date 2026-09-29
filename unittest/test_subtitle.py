@@ -219,3 +219,39 @@ def test_download_subtitle_provider_error(tmp_path, monkeypatch, no_ffprobe, sub
         raise ConnectionError('network down')
     monkeypatch.setattr(subtitlecat, 'get_subtitle', raise_error)
     assert not subtitle.download_subtitle(make_movie(touch(tmp_path / 'SSIS-001.mp4')))
+
+
+def test_scan_nfo_dir_when_subtitle_only(tmp_path, monkeypatch):
+    import javsp.file
+    real = javsp.file.Cfg()
+    size = real.scanner.minimum_size + 1
+    for name in ('SSIS-001/SSIS-001.mp4', 'MIDV-018/MIDV-018-C.mp4'):
+        path = tmp_path / name
+        os.makedirs(path.parent, exist_ok=True)
+        with open(path, 'wb') as f:
+            f.truncate(size)
+        touch(path.parent / 'movie.nfo')
+    scanner = real.scanner.model_copy(update={'skip_nfo_dir': True})
+
+    def scan(subtitle_only):
+        fake = SimpleNamespace(scanner=scanner, summarizer=SimpleNamespace(
+            subtitle=SubtitleSummarize(subtitle_only=subtitle_only)))
+        monkeypatch.setattr(javsp.file, 'Cfg', lambda: fake)
+        return sorted(m.dvdid for m in javsp.file.scan_movies(str(tmp_path)))
+
+    assert scan(False) == []
+    assert scan(True) == ['MIDV-018', 'SSIS-001']
+
+
+def test_run_subtitle_only_mode(tmp_path, monkeypatch):
+    import javsp.__main__ as main
+    results = {'SSIS-001': True, 'MIDV-018': False}
+    def fake_download(movie):
+        if movie.dvdid == 'ABP-001':
+            raise RuntimeError('boom')
+        return results[movie.dvdid]
+    monkeypatch.setattr(main, 'download_subtitle', fake_download)
+    monkeypatch.setattr(main, 'process_movie', lambda *a, **kw: pytest.fail('不应抓取影片信息'))
+    movies = [make_movie(tmp_path / f'{i}.mp4', i) for i in ('SSIS-001', 'MIDV-018', 'ABP-001')]
+    # 单部影片出错不影响其他影片
+    assert main.RunSubtitleOnlyMode(movies) == 1

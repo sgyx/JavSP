@@ -173,6 +173,10 @@ summarizer:
     # 字幕文件名在影片文件名之后追加的部分，{lang}会被替换为语言代码，如'影片名.zh-CN.srt'
     # 设置为''时字幕与影片完全同名，如'影片名.srt'
     filename_suffix: '.{lang}'
+    # 仅补充字幕模式：只为扫描到的影片下载字幕，不抓取信息，也不移动/重命名文件或写入NFO和封面
+    # 适合为已经整理过的影片补充字幕。开启后无需同时开启enabled，且会扫描有NFO的文件夹（忽略scanner.skip_nfo_dir）
+    # NOTE: '#整理完成'文件夹默认在scanner.ignored_folder_name_pattern中，请直接选择该文件夹作为扫描目录
+    subtitle_only: false
 
 ################################
 translator:
